@@ -17,7 +17,7 @@ export function rateItem(item,rating,now=new Date()) {
  item.stage=rating==='remember'?Math.min((item.stage||0)+1,3):0;
  const days=rating==='remember'?[1,1,3,7][item.stage]:1;
  item.due=new Date(+now+days*86400000).toISOString();
- item.lastRating=rating;item.lastReview=now.toISOString();
+ item.lastRating=rating;item.lastReview=now.toISOString();item.reviewUpdatedAt=new Date(Math.max(+now,(Date.parse(item.reviewUpdatedAt)||0)+1)).toISOString();item.reviewRevision=item.reviewUpdatedAt+':'+Math.random().toString(36).slice(2);
  // Self-report schedules practice; it never sets a mastered flag.
  return rating!=='remember';
 }
@@ -27,7 +27,7 @@ export function mergeStates(local, remote) {
  for(const item of local.items){
   const other=items.get(item.id);
   if(!other){items.set(item.id,item);continue;}
-  const newer=(Date.parse(other.lastReview)||0)>(Date.parse(item.lastReview)||0)?other:item;
+  const newer=(Date.parse(other.reviewUpdatedAt||other.lastReview)||0)>(Date.parse(item.reviewUpdatedAt||item.lastReview)||0)?other:item;
   const content=(Date.parse(other.meaningUpdatedAt)||0)>(Date.parse(item.meaningUpdatedAt)||0)?other:item;
   items.set(item.id,{...newer,meaning:content.meaning,originalMeaning:content.originalMeaning,meaningUpdatedAt:content.meaningUpdatedAt,studyDay:[item.studyDay,other.studyDay].filter(Boolean).sort().at(-1)});
  }
@@ -139,4 +139,28 @@ export function senseOptions(meaning) {
   return text.slice(prefix.length).split(/[；;]/).map(x=>x.trim()).filter(Boolean).map(x=>pos.test(x)?x:prefix+x);
  }).filter(Boolean);
  return parts.length>1&&parts.every(x=>/[\u3400-\u9fff]/.test(x))?[meaning,...new Set(parts)]:[meaning];
+}
+
+export function commitDraft(state,flow,now=new Date()) {
+ const draft=flow.draft;if(!draft||!draft.meaning.trim())return false;
+ const old=state.items.find(x=>x.id===draft.id);
+ addItem(state,draft,now);
+ if(old&&old.meaning!==draft.meaning){old.originalMeaning||=old.meaning;old.meaning=draft.meaning;old.meaningUpdatedAt=now.toISOString();}
+ learnWord(flow,draft.id);flow.draft=null;flow.lookupDraft=null;
+ if(flow.phase==='group')beginReview(flow,flow.pending,'group');
+ return true;
+}
+export function recordReview(state,flow,id,rating,now=new Date()) {
+ const item=state.items.find(x=>x.id===id);if(!item)return;
+ const before=JSON.parse(JSON.stringify(flow));delete before.undo;
+ const schedule={stage:item.stage,due:item.due,lastRating:item.lastRating,lastReview:item.lastReview,reviewUpdatedAt:item.reviewUpdatedAt};
+ const again=rateItem(item,rating,now);advanceReview(flow,id,again);
+ flow.undo={id,before,schedule,expectedRevision:item.reviewRevision||item.reviewUpdatedAt};flow.recall=null;
+}
+export function undoReview(state,flow,now=new Date()) {
+ const undo=flow.undo;if(!undo)return false;const item=state.items.find(x=>x.id===undo.id);
+ if(!item||(item.reviewRevision||item.reviewUpdatedAt||item.lastReview)!==undo.expectedRevision){flow.undo=null;return false;}
+ for(const key of ['lastRating','lastReview'])if(undo.schedule[key]===undefined)undo.schedule[key]=null;
+ const revision=new Date(Math.max(+now,(Date.parse(item.reviewUpdatedAt)||0)+1)).toISOString();Object.assign(item,undo.schedule,{reviewUpdatedAt:revision,reviewRevision:revision+':'+Math.random().toString(36).slice(2)});
+ for(const key of Object.keys(flow))delete flow[key];Object.assign(flow,undo.before,{undo:null});return true;
 }
