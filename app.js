@@ -1,4 +1,4 @@
-import {day,loadState,addItem,rateItem,mergeStates} from './learning.js';
+import {day,loadState,addItem,rateItem,mergeStates} from './learning.js?v=b4b04ed82da234df';
 const $=id=>document.getElementById(id);
 const base=(window.WORD_LEARNING_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
 let storage;
