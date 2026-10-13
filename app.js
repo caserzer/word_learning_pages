@@ -69,7 +69,7 @@ function renderReview(){
  $('check-instruction').textContent=flow.recall==='known'?'和你刚才想的意思对上了吗？':'看清意思，再听一遍。这个词会再练一次。';$('card-source').replaceChildren(sourceDetails(activeItem));
 }
 function nextInput(){stopAudio();searchVersion++;view='today';flow.active=true;flow.phase='input';flow.draft=null;flow.lookupDraft=null;flow.typedQuery='';flow.recall=null;$('query').value='';$('results').replaceChildren();$('status').textContent='';save();render();$('query').focus();}
-function chooseWord(item){stopAudio();searchVersion++;view='today';flow.active=true;flow.phase='study';flow.currentId=item.id;flow.typedQuery=item.word;flow.draft=JSON.parse(JSON.stringify(item));flow.lookupDraft=null;$('results').replaceChildren();$('status').textContent='';save();render();$('draft-word').focus();}
+function chooseWord(item){flow.undo=null;stopAudio();searchVersion++;view='today';flow.active=true;flow.phase='study';flow.currentId=item.id;flow.typedQuery=item.word;flow.draft=JSON.parse(JSON.stringify(item));flow.lookupDraft=null;$('results').replaceChildren();$('status').textContent='';save();render();$('draft-word').focus();}
 function rememberDraft(){if(!flow.draft)return;flow.draft.meaning=$('draft-meaning').value.trim();if(!flow.draft.meaning){$('draft-meaning').focus();return;}stopAudio();flow.undo=null;const word=flow.draft.word;if(!commitDraft(state,flow))return;searchVersion++;flow.typedQuery='';$('results').replaceChildren();$('query').value='';save();render();if(flow.phase==='review'){$('prompt').focus();}else{$('status').textContent=`${word} 已记到本组。`;$('query').focus();}}
 function review(ids,kind){ids=ids.filter(id=>itemById(id));if(!ids.length&&['due','today'].includes(kind)){$('status').textContent=kind==='due'?'现在没有到期的词。':'今天还没有记下的词，可以先回到作业台添加。';return;}stopAudio();searchVersion++;if(['due','today'].includes(kind)){if((flow.phase==='review'||flow.suspended==='review')&&['due','today'].includes(flow.reviewKind)){flow.phase='review';delete flow.suspended;view='today';save();render();$('prompt').focus();return;}const prior=JSON.parse(JSON.stringify(flow));delete prior.undo;delete prior.returnFlow;flow.returnFlow=prior;}beginReview(flow,ids.filter(id=>itemById(id)),kind);flow.recall=null;flow.undo=null;view='today';save();render();if(flow.phase==='review')$('prompt').focus();}
 function finish(){if(flow.draft||flow.lookupDraft){$('status').textContent='这个词还没记下。先记下它，或点“换一个词”取消草稿。';return;}review(flow.pending,'finish');}
@@ -99,12 +99,12 @@ $('due').onclick=()=>review(state.items.filter(x=>Date.parse(x.due)<=Date.now())
 $('export').onclick=()=>{const u=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=u;a.download='word-learning-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);};
 function openBook(id){stopAudio();searchVersion++;if(view!=='book')bookReturnView=view;view='book';bookEditId=id||null;save();render();if(id)$('book-meaning').focus();else $('book-query').focus();}
 function renderBook(){
- const q=$('book-query').value.trim().toLowerCase(),items=state.items.filter(x=>x.word.toLowerCase().includes(q)||x.meaning.includes(q));$('book-count').textContent=items.length?`找到 ${items.length} 个已保存的词`:'词本里暂时没有这些词。';
+ const q=$('book-query').value.trim().toLowerCase(),items=state.items.filter(x=>x.word.toLowerCase().includes(q)||x.meaning.includes(q));$('book-count').textContent=items.length?`找到 ${items.length} 个已保存的词${items.length>100?'，显示前 100 个，请继续输入缩小范围。':''}`:'词本里暂时没有这些词。';
  $('book-list').replaceChildren(...items.slice(0,100).map(item=>{const row=document.createElement('article'),title=document.createElement('h2'),meaning=document.createElement('p'),audioBtn=document.createElement('button'),edit=document.createElement('button');wordDisplay(title,item);meaning.textContent=item.meaning;audioBtn.className='quiet';audioBtn.textContent='听发音';audioBtn.onclick=()=>say(item,audioBtn);edit.className='quiet';edit.textContent='修改意思';edit.onclick=()=>{bookEditId=item.id;renderBook();$('book-meaning').focus();};row.append(title,meaning,audioBtn,edit);return row;}));
  const item=itemById(bookEditId);$('book-editor').hidden=!item;if(item){$('book-word').textContent=item.word;$('book-meaning').value=item.meaning;}
 }
 $('open-book').onclick=()=>openBook();$('book-back').onclick=()=>{bookEditId=null;switchView(bookReturnView);if(view==='today'&&flow.phase==='review')$('prompt').focus();else if(view==='today'&&flow.draft)$('draft-word').focus();};$('book-query').oninput=renderBook;
-$('book-cancel').onclick=()=>{bookEditId=null;renderBook();};$('book-editor').onsubmit=e=>{e.preventDefault();const item=itemById(bookEditId),meaning=$('book-meaning').value.trim();if(!item||!meaning)return;item.originalMeaning||=item.meaning;item.meaning=meaning;item.meaningUpdatedAt=new Date().toISOString();if(flow.draft?.id===item.id)flow.draft.meaning=meaning;if(flow.phase==='review'&&flow.reviewIds[flow.position]===item.id)flow.recall=null;save();bookEditId=null;renderBook();$('status').textContent='词义已修改。学习和回顾位置没有改变。';};
+$('book-cancel').onclick=()=>{bookEditId=null;renderBook();};$('book-editor').onsubmit=e=>{e.preventDefault();const item=itemById(bookEditId),meaning=$('book-meaning').value.trim();if(!item||!meaning)return;item.originalMeaning||=item.meaning;item.meaning=meaning;item.meaningUpdatedAt=new Date().toISOString();if(flow.draft?.id===item.id){flow.draft.originalMeaning||=item.originalMeaning;flow.draft.meaning=meaning;}for(const task of [flow,flow.returnFlow,flow.resumeAfterReview,flow.undo?.before])if(task?.reviewIds?.[task.position]===item.id)task.recall=null;save();bookEditId=null;renderBook();$('status').textContent='词义已修改。学习和回顾位置没有改变。';};
 function sourceDetails(item){
  const details=document.createElement('details'),summary=document.createElement('summary');
  summary.textContent='资料来源';details.append(summary);
@@ -140,7 +140,7 @@ async function renderNewWord(q,version){
 }
 function candidate(item){const b=document.createElement('button');b.className='candidate secondary';b.textContent=item.word+' · '+item.meaning;b.onclick=()=>chooseWord(item);$('results').append(b);}
 $('search').onsubmit=async e=>{
- e.preventDefault();const q=$('query').value.trim(),version=++searchVersion;if(!q)return;flow.draft=null;flow.phase='input';flow.lookupDraft={query:q,meaning:'',spelling:false,mode:'query'};flow.typedQuery=q;save();$('draft').hidden=true;
+ e.preventDefault();const q=$('query').value.trim(),version=++searchVersion;if(!q)return;flow.undo=null;$('undo-bar').hidden=true;flow.draft=null;flow.phase='input';flow.lookupDraft={query:q,meaning:'',spelling:false,mode:'query'};flow.typedQuery=q;save();$('draft').hidden=true;
  const existing=state.items.find(x=>x.word===q)||state.items.find(x=>q.toLowerCase()!=='may'&&x.word.toLowerCase()===q.toLowerCase());if(existing){chooseWord(existing);return;}
  $('results').replaceChildren();$('status').textContent='正在查找…';
  try{
@@ -159,5 +159,5 @@ $('search').onsubmit=async e=>{
 };
 function restoreLookup(){if(view==='today'&&!flow.draft&&flow.lookupDraft&&['home','input'].includes(flow.phase)&&!flow.suspended){$('query').value=flow.lookupDraft.query;$('results').replaceChildren();if(flow.lookupDraft.mode==='query')void $('search').onsubmit({preventDefault(){}});else void renderNewWord(flow.lookupDraft.query,++searchVersion);}}
 if(window.matchMedia?.('(max-width:760px)')?.matches)$('rail-details').open=false;
-$('query').value=flow.typedQuery||flow.lookupDraft?.query||flow.draft?.word||'';$('query').oninput=()=>{flow.typedQuery=$('query').value;save();};
+$('query').value=flow.typedQuery||flow.lookupDraft?.query||flow.draft?.word||'';$('query').oninput=()=>{flow.undo=null;$('undo-bar').hidden=true;flow.typedQuery=$('query').value;save();};
 render();restoreLookup();
