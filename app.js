@@ -1,4 +1,4 @@
-import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts} from './learning.js?v=608a2e7062339561';
+import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts} from './learning.js?v=8c2a15c57c7d07ea';
 const $=id=>document.getElementById(id);
 const base=(window.WORD_LEARNING_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
 let storage;try{storage=window.localStorage;}catch{}
@@ -40,7 +40,7 @@ function render(){
  $('today').disabled=flow.phase!=='home';
  $('saved-count').textContent=`已保存 ${state.items.length} 个词`;
  $('queue').replaceChildren(...state.items.map(x=>{const li=document.createElement('li');wordDisplay(li,x);return li;}));
- const resume=flow.active&&(flow.suspended||!['home','finished'].includes(flow.phase));$('begin').textContent=resume?'继续上次学习':'开始今天的学习';
+ const resume=Boolean(flow.suspended)||(flow.active&&!['home','finished'].includes(flow.phase));$('begin').textContent=resume?'继续上次学习':'开始今天的学习';
  if(flow.phase==='home'){$('home').hidden=false;return;}
  if(flow.phase==='input'){$('entry').hidden=false;$('progress').textContent=`今天已学 ${flow.studied.length} 个，这一组 ${flow.pending.length} / 3 个。`;return;}
  if(flow.phase==='study'||flow.phase==='review'){
