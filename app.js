@@ -1,4 +1,4 @@
-import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts} from './learning.js?v=8c2a15c57c7d07ea';
+import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,reviewProgress,senseOptions} from './learning.js?v=328e6bc594d49f7f';
 const $=id=>document.getElementById(id);
 const base=(window.WORD_LEARNING_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
 let storage;try{storage=window.localStorage;}catch{}
@@ -9,21 +9,22 @@ function save(){try{
  for(const item of merged.items){const current=state.items.find(x=>x.id===item.id);if(current)Object.assign(current,item);else state.items.push(item);}
  storage.setItem('word-learning-v1',JSON.stringify(state));$('storage-warning').hidden=true;
 }catch{$('storage-warning').hidden=false;}}
-function stopAudio(){speechGeneration++;clearTimeout(audioTimer);if(audio){audio.pause();audio=null;}window.speechSynthesis?.cancel();}
+function audioState(button,message){$('speak').textContent=button;$('audio-status').textContent=message;}
+function stopAudio(){audioState('听发音','');speechGeneration++;clearTimeout(audioTimer);if(audio){audio.pause();audio=null;}window.speechSynthesis?.cancel();}
 function say(item){
- stopAudio();const generation=speechGeneration;$('audio-status').textContent='';
+ stopAudio();const generation=speechGeneration;audioState('正在加载…','正在加载美式录音…');
  const fallback=()=>{
   if(generation!==speechGeneration)return;
   const synth=window.speechSynthesis;
-  if(!synth||!window.SpeechSynthesisUtterance){$('audio-status').textContent='这个浏览器暂时不能播放发音，请换一个支持语音的浏览器。';return;}
+  if(!synth||!window.SpeechSynthesisUtterance){audioState('重试发音','这个浏览器暂时不能播放发音，请换一个支持语音的浏览器。');return;}
   const utterance=new window.SpeechSynthesisUtterance(item.word);utterance.lang='en-US';
   const voice=synth.getVoices().find(v=>/^en[-_]US$/i.test(v.lang));if(voice)utterance.voice=voice;
-  utterance.rate=.85;utterance.onerror=()=>{if(generation===speechGeneration)$('audio-status').textContent='朗读暂时不可用，请检查设备语音设置。';};
-  $('audio-status').textContent='设备英语朗读';synth.speak(utterance);
+  utterance.rate=.85;utterance.onerror=()=>{if(generation===speechGeneration)audioState('重试发音','朗读暂时不可用，请检查设备语音设置。');};utterance.onstart=()=>{if(generation===speechGeneration)audioState('正在朗读','设备英语朗读');};utterance.onend=()=>{if(generation===speechGeneration)audioState('再听一次','设备朗读结束');};
+  audioState('设备朗读…','正在准备设备英语朗读…');try{synth.speak(utterance);}catch{utterance.onerror();}
  };
  if(item.audio?.audioUrl){
   let fellBack=false,recording;const fail=()=>{if(fellBack||generation!==speechGeneration)return;fellBack=true;clearTimeout(audioTimer);recording?.pause();fallback();};
-  try{recording=new Audio(item.audio.audioUrl);audio=recording;recording.onerror=fail;recording.onplaying=()=>{if(generation===speechGeneration)clearTimeout(audioTimer);};audioTimer=setTimeout(fail,8000);recording.play().catch(fail);}catch{fail();}
+  try{recording=new Audio(item.audio.audioUrl);audio=recording;recording.onerror=fail;recording.onplaying=()=>{if(!fellBack&&generation===speechGeneration){clearTimeout(audioTimer);audioState('正在播放','美式录音播放中');}};recording.onended=()=>{if(!fellBack&&generation===speechGeneration){clearTimeout(audioTimer);audioState('再听一次','录音播放结束');}};audioTimer=setTimeout(fail,8000);recording.play().catch(fail);}catch{fail();}
  }else fallback();
 }
 function wordDisplay(node,item){
@@ -36,6 +37,9 @@ function wordDisplay(node,item){
 }
 function render(){
  for(const id of ['home','entry','card','pause'])$(id).hidden=true;
+ $('stage').textContent=({home:'单词学习',input:'添加单词',study:'学习',review:'回顾',group:'小组回顾',choice:'回顾完成',finished:'今日完成'})[flow.phase]||'学习';
+ $('close').hidden=['home','finished'].includes(flow.phase);
+ $('finish').textContent=flow.pending.length?'回顾剩余词并结束':'结束今天的学习';
  $('count').textContent=`今天已学 ${flow.studied.length} 个词 · 到期 ${state.items.filter(x=>Date.parse(x.due)<=Date.now()).length} 个`;
  $('today').disabled=flow.phase!=='home';
  $('saved-count').textContent=`已保存 ${state.items.length} 个词`;
@@ -47,14 +51,17 @@ function render(){
   activeItem=state.items.find(x=>x.id===(flow.phase==='study'?flow.currentId:flow.reviewIds[flow.position]));
   if(!activeItem){flow.phase='input';save();render();return;}
   $('card').hidden=false;wordDisplay($('prompt'),activeItem);$('answer').textContent=activeItem.meaning;
-  const review=flow.phase==='review';$('card-progress').textContent=review?`先想一想 · ${flow.position+1} / ${flow.reviewIds.length}`:`认识这个词 · 今天第 ${flow.studied.length+1} 个`;
+  const review=flow.phase==='review';$('card-progress').textContent=review?reviewProgress(flow):`认识这个词 · 今天第 ${flow.studied.length+1} 个`;
   $('answer').hidden=review;$('reveal').hidden=!review;$('ratings').hidden=true;$('learned').hidden=review;
-  $('card-source').replaceChildren(sourceDetails(activeItem));$('audio-status').textContent='';return;
+  $('card-source').replaceChildren(sourceDetails(activeItem));audioState('听发音','');
+  $('sense-editor').hidden=review;$('sense-editor').open=false;
+  const options=senseOptions(activeItem.originalMeaning||activeItem.meaning);$('sense-choice').hidden=options.length<2;$('sense-choice-label').hidden=options.length<2;$('sense-choice').replaceChildren(...options.map(text=>{const option=document.createElement('option');option.value=text;option.textContent=text;return option;}));$('sense-choice').value=activeItem.meaning;$('sense-text').value=activeItem.meaning;
+  return;
  }
  $('pause').hidden=false;const p=$('pause-primary'),s=$('pause-secondary');s.hidden=false;
  if(flow.phase==='group'){
   $('pause-title').textContent='三个词，回顾一下';$('pause-text').textContent='先看英文，想想意思。不确定的词会再练一次。';
-  p.textContent='回顾这三个词';p.onclick=()=>review(flow.pending,'group');s.textContent='今天先到这里';s.onclick=finish;
+  p.textContent='回顾这三个词';p.onclick=()=>review(flow.pending,'group');s.textContent='回顾后结束今天';s.onclick=finish;
  }else if(flow.phase==='choice'){
   $('pause-title').textContent='这一组回顾完成';$('pause-text').textContent='再学一个，还是今天先到这里？';
   p.textContent='继续学下一个';p.onclick=nextInput;s.textContent='结束今天的学习';s.onclick=finish;
@@ -64,17 +71,19 @@ function render(){
  }
 }
 function nextInput(){stopAudio();flow.active=true;flow.phase='input';searchVersion++;$('results').replaceChildren();$('query').value='';$('status').textContent='';save();render();$('query').focus();}
-function chooseWord(item){stopAudio();searchVersion++;addItem(state,item);flow.active=true;flow.currentId=item.id;flow.phase='study';save();render();}
-function review(ids,kind){stopAudio();if(['due','today'].includes(kind)&&flow.suspended)flow.resumeAfterReview={phase:flow.suspended,currentId:flow.currentId,reviewIds:[...flow.reviewIds],position:flow.position,retried:[...flow.retried],reviewKind:flow.reviewKind};beginReview(flow,ids.filter(id=>state.items.some(x=>x.id===id)),kind);save();render();}
+function chooseWord(item){$('status').textContent='';stopAudio();searchVersion++;addItem(state,item);flow.active=true;flow.currentId=item.id;flow.phase='study';save();render();$('prompt').focus();}
+function review(ids,kind){stopAudio();if(['due','today'].includes(kind)&&flow.suspended)flow.resumeAfterReview={phase:flow.suspended,currentId:flow.currentId,reviewIds:[...flow.reviewIds],position:flow.position,retried:[...flow.retried],reviewKind:flow.reviewKind,reviewInitialCount:flow.reviewInitialCount};beginReview(flow,ids.filter(id=>state.items.some(x=>x.id===id)),kind);save();render();}
 function finish(){review(flow.pending,'finish');}
 $('begin').onclick=()=>{flow.active=true;if(flow.suspended){flow.phase=flow.suspended;delete flow.suspended;save();render();}else nextInput();};
 $('finish').onclick=finish;
 $('learned').onclick=()=>{if(flow.phase!=='study')return;stopAudio();learnWord(flow,activeItem.id);save();if(flow.phase==='input')nextInput();else render();};
 $('speak').onclick=()=>{if(activeItem)say(activeItem);};
-$('reveal').onclick=()=>{$('answer').hidden=false;$('ratings').hidden=false;$('reveal').hidden=true;};
+$('reveal').onclick=()=>{$('answer').hidden=false;$('ratings').hidden=false;$('reveal').hidden=true;$('announcement').textContent=activeItem.word+'：'+activeItem.meaning+'。请选择记得、模糊或忘记。';document.querySelectorAll('[data-rating]')[0].focus();};
+$('sense-choice').onchange=()=>{$('sense-text').value=$('sense-choice').value;};
+$('save-sense').onclick=()=>{const meaning=$('sense-text').value.trim();if(!meaning){$('sense-text').focus();return;}activeItem.originalMeaning||=activeItem.meaning;activeItem.meaning=meaning;activeItem.meaningUpdatedAt=new Date().toISOString();save();render();$('announcement').textContent='课本意思已保存。';$('learned').focus();};
 document.querySelectorAll('[data-rating]').forEach(b=>b.onclick=()=>{
  if(flow.phase!=='review'||$('ratings').hidden)return;
- stopAudio();const again=rateItem(activeItem,b.dataset.rating);const done=advanceReview(flow,activeItem.id,again);if(done&&flow.resumeAfterReview){const prior=flow.resumeAfterReview;delete flow.resumeAfterReview;Object.assign(flow,prior,{suspended:prior.phase,phase:'home'});}save();render();
+ stopAudio();const again=rateItem(activeItem,b.dataset.rating);const done=advanceReview(flow,activeItem.id,again);if(done&&flow.resumeAfterReview){const prior=flow.resumeAfterReview;delete flow.resumeAfterReview;Object.assign(flow,prior,{suspended:prior.phase,phase:'home'});}save();render();if(flow.phase==='review')$('prompt').focus();else if(flow.phase==='home')$('begin').focus();else if(flow.phase!=='input')$('pause-title').focus();
 });
 $('close').onclick=()=>{stopAudio();flow.suspended=flow.phase;flow.phase='home';save();render();$('begin').textContent='继续上次学习';};
 $('due').onclick=()=>{const ids=state.items.filter(x=>Date.parse(x.due)<=Date.now()).map(x=>x.id);if(!ids.length){$('status').textContent='现在没有到期的词。';return;}review(ids,'due');};
@@ -93,7 +102,7 @@ async function renderNewWord(q,version){
  const form=document.createElement('form');form.className='new-word';
  const title=document.createElement('h3');title.textContent='添加新词：'+q;
  const label=document.createElement('label');label.textContent='课本释义（可以自行填写）';
- const meaning=document.createElement('input');meaning.id='new-word-meaning';label.htmlFor=meaning.id;meaning.required=true;meaning.maxLength=500;meaning.placeholder='输入中文意思';
+ const meaning=document.createElement('input');meaning.id='new-word-meaning';meaning.name='meaning';meaning.autocomplete='off';label.htmlFor=meaning.id;meaning.required=true;meaning.maxLength=500;meaning.placeholder='输入中文意思';
  const info=document.createElement('p');info.textContent='正在补充词义…';
  const spelling=document.createElement('label'),check=document.createElement('input');check.type='checkbox';check.required=true;spelling.append(check,document.createTextNode('我已确认这个单词或词组的拼写'));
  const submit=document.createElement('button');submit.textContent='确认并学习';

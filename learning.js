@@ -28,7 +28,8 @@ export function mergeStates(local, remote) {
   const other=items.get(item.id);
   if(!other){items.set(item.id,item);continue;}
   const newer=(Date.parse(other.lastReview)||0)>(Date.parse(item.lastReview)||0)?other:item;
-  items.set(item.id,{...newer,studyDay:[item.studyDay,other.studyDay].filter(Boolean).sort().at(-1)});
+  const content=(Date.parse(other.meaningUpdatedAt)||0)>(Date.parse(item.meaningUpdatedAt)||0)?other:item;
+  items.set(item.id,{...newer,meaning:content.meaning,originalMeaning:content.originalMeaning,meaningUpdatedAt:content.meaningUpdatedAt,studyDay:[item.studyDay,other.studyDay].filter(Boolean).sort().at(-1)});
  }
  return {version:1,items:[...items.values()]};
 }
@@ -44,7 +45,7 @@ export function learnWord(flow,id) {
  flow.currentId=null;flow.phase=flow.pending.length>=3?'group':'input';
 }
 export function beginReview(flow,ids,kind) {
- flow.reviewIds=[...new Set(ids)];flow.position=0;flow.retried=[];flow.reviewKind=kind;
+ flow.reviewIds=[...new Set(ids)];flow.reviewInitialCount=flow.reviewIds.length;flow.position=0;flow.retried=[];flow.reviewKind=kind;
  flow.phase=flow.reviewIds.length?'review':kind==='finish'?'finished':'home';
 }
 export function advanceReview(flow,id,again) {
@@ -123,4 +124,15 @@ export function pronunciationParts(word) {
  const tokens=word.match(/[A-Za-z]+(?:'[A-Za-z]+)?|[^A-Za-z]+/g)||[];
  if(!tokens.length||tokens.some(x=>/[A-Za-z]/.test(x)&&!verifiedMonosyllables.has(x.toLowerCase())&&!Object.hasOwn(reviewedSyllables,x.toLowerCase())))return null;
  return tokens.flatMap(token=>{const parts=reviewedSyllables[token.toLowerCase()];if(!parts)return [token];let offset=0;return parts.map(part=>{const text=token.slice(offset,offset+part.length);offset+=part.length;return text;});});
+}
+
+export function reviewProgress(flow) {
+ const initial=flow.reviewInitialCount??Math.max(0,flow.reviewIds.length-flow.retried.length);
+ const modes={group:'三词回顾',finish:'收尾回顾',due:'到期复习',today:'今日回顾'};
+ const label=modes[flow.reviewKind]||'回顾';
+ return flow.position<initial?`${label} · 第 ${flow.position+1} / ${initial} 词`:`${label} · 再练 ${flow.position-initial+1} / ${flow.reviewIds.length-initial}`;
+}
+export function senseOptions(meaning) {
+ const parts=meaning.split(/[；;]/).map(x=>x.trim()).filter(Boolean);
+ return parts.length>1&&parts.every(x=>/[\u3400-\u9fff]/.test(x))?[meaning,...new Set(parts)]:[meaning];
 }
