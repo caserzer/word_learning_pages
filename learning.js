@@ -133,6 +133,10 @@ export function reviewProgress(flow) {
  return flow.position<initial?`${label} · 第 ${flow.position+1} / ${initial} 词`:`${label} · 再练 ${flow.position-initial+1} / ${flow.reviewIds.length-initial}`;
 }
 export function senseOptions(meaning) {
- const parts=meaning.split(/[；;]/).map(x=>x.trim()).filter(Boolean);
+ const pos=/^(?:[a-z]+\.\s*)+/i;
+ const parts=meaning.split(/\r?\n/).flatMap(line=>{
+  const text=line.trim(),prefix=text.match(pos)?.[0]||'';
+  return text.slice(prefix.length).split(/[；;]/).map(x=>x.trim()).filter(Boolean).map(x=>pos.test(x)?x:prefix+x);
+ }).filter(Boolean);
  return parts.length>1&&parts.every(x=>/[\u3400-\u9fff]/.test(x))?[meaning,...new Set(parts)]:[meaning];
 }

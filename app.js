@@ -1,4 +1,4 @@
-import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,reviewProgress,senseOptions} from './learning.js?v=328e6bc594d49f7f';
+import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,reviewProgress,senseOptions} from './learning.js?v=8f71b306106717a7';
 const $=id=>document.getElementById(id);
 const base=(window.WORD_LEARNING_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
 let storage;try{storage=window.localStorage;}catch{}
@@ -55,7 +55,7 @@ function render(){
   $('answer').hidden=review;$('reveal').hidden=!review;$('ratings').hidden=true;$('learned').hidden=review;
   $('card-source').replaceChildren(sourceDetails(activeItem));audioState('听发音','');
   $('sense-editor').hidden=review;$('sense-editor').open=false;
-  const options=senseOptions(activeItem.originalMeaning||activeItem.meaning);$('sense-choice').hidden=options.length<2;$('sense-choice-label').hidden=options.length<2;$('sense-choice').replaceChildren(...options.map(text=>{const option=document.createElement('option');option.value=text;option.textContent=text;return option;}));$('sense-choice').value=activeItem.meaning;$('sense-text').value=activeItem.meaning;
+  const options=senseOptions(activeItem.originalMeaning||activeItem.meaning);if(!options.includes(activeItem.meaning))options.unshift(activeItem.meaning);$('sense-choice').hidden=options.length<2;$('sense-choice-label').hidden=options.length<2;$('sense-choice').replaceChildren(...options.map(text=>{const option=document.createElement('option');option.value=text;option.textContent=text;return option;}));$('sense-choice').value=activeItem.meaning;$('sense-text').value=activeItem.meaning;
   return;
  }
  $('pause').hidden=false;const p=$('pause-primary'),s=$('pause-secondary');s.hidden=false;
