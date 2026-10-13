@@ -36,6 +36,7 @@ function wordDisplay(node,item){
  }else node.textContent=item.word;
 }
 function render(){
+ $('announcement').textContent='';
  for(const id of ['home','entry','card','pause'])$(id).hidden=true;
  $('stage').textContent=({home:'单词学习',input:'添加单词',study:'学习',review:'回顾',group:'小组回顾',choice:'回顾完成',finished:'今日完成'})[flow.phase]||'学习';
  $('close').hidden=['home','finished'].includes(flow.phase);
@@ -74,7 +75,7 @@ function nextInput(){stopAudio();flow.active=true;flow.phase='input';searchVersi
 function chooseWord(item){$('status').textContent='';stopAudio();searchVersion++;addItem(state,item);flow.active=true;flow.currentId=item.id;flow.phase='study';save();render();$('prompt').focus();}
 function review(ids,kind){stopAudio();if(['due','today'].includes(kind)&&flow.suspended)flow.resumeAfterReview={phase:flow.suspended,currentId:flow.currentId,reviewIds:[...flow.reviewIds],position:flow.position,retried:[...flow.retried],reviewKind:flow.reviewKind,reviewInitialCount:flow.reviewInitialCount};beginReview(flow,ids.filter(id=>state.items.some(x=>x.id===id)),kind);save();render();}
 function finish(){review(flow.pending,'finish');}
-$('begin').onclick=()=>{flow.active=true;if(flow.suspended){flow.phase=flow.suspended;delete flow.suspended;save();render();}else nextInput();};
+$('begin').onclick=()=>{flow.active=true;if(flow.suspended){flow.phase=flow.suspended;delete flow.suspended;save();render();if(['study','review'].includes(flow.phase))$('prompt').focus();else if(flow.phase==='input')$('query').focus();else $('pause-title').focus();}else nextInput();};
 $('finish').onclick=finish;
 $('learned').onclick=()=>{if(flow.phase!=='study')return;stopAudio();learnWord(flow,activeItem.id);save();if(flow.phase==='input')nextInput();else render();};
 $('speak').onclick=()=>{if(activeItem)say(activeItem);};
@@ -85,7 +86,7 @@ document.querySelectorAll('[data-rating]').forEach(b=>b.onclick=()=>{
  if(flow.phase!=='review'||$('ratings').hidden)return;
  stopAudio();const again=rateItem(activeItem,b.dataset.rating);const done=advanceReview(flow,activeItem.id,again);if(done&&flow.resumeAfterReview){const prior=flow.resumeAfterReview;delete flow.resumeAfterReview;Object.assign(flow,prior,{suspended:prior.phase,phase:'home'});}save();render();if(flow.phase==='review')$('prompt').focus();else if(flow.phase==='home')$('begin').focus();else if(flow.phase!=='input')$('pause-title').focus();
 });
-$('close').onclick=()=>{stopAudio();flow.suspended=flow.phase;flow.phase='home';save();render();$('begin').textContent='继续上次学习';};
+$('close').onclick=()=>{stopAudio();flow.suspended=flow.phase;flow.phase='home';save();render();$('begin').textContent='继续上次学习';$('begin').focus();};
 $('due').onclick=()=>{const ids=state.items.filter(x=>Date.parse(x.due)<=Date.now()).map(x=>x.id);if(!ids.length){$('status').textContent='现在没有到期的词。';return;}review(ids,'due');};
 $('today').onclick=()=>{if(flow.phase==='home')review(state.items.filter(x=>x.studyDay===day()).map(x=>x.id),'today');};
 $('export').onclick=()=>{const u=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=u;a.download='word-learning-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);};
