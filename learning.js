@@ -17,7 +17,7 @@ export function rateItem(item,rating,now=new Date()) {
  item.stage=rating==='remember'?Math.min((item.stage||0)+1,3):0;
  const days=rating==='remember'?[1,1,3,7][item.stage]:1;
  item.due=new Date(+now+days*86400000).toISOString();
- item.lastRating=rating;item.lastReview=now.toISOString();item.reviewUpdatedAt=new Date(Math.max(+now,(Date.parse(item.reviewUpdatedAt)||0)+1)).toISOString();item.reviewRevision=item.reviewUpdatedAt+':'+Math.random().toString(36).slice(2);
+ item.history=[...(item.history||[]),{at:now.toISOString(),rating}];item.lastRating=rating;item.lastReview=now.toISOString();item.reviewUpdatedAt=new Date(Math.max(+now,(Date.parse(item.reviewUpdatedAt)||0)+1)).toISOString();item.reviewRevision=item.reviewUpdatedAt+':'+Math.random().toString(36).slice(2);
  // Self-report schedules practice; it never sets a mastered flag.
  return rating!=='remember';
 }
@@ -37,7 +37,7 @@ export function mergeStates(local, remote) {
 // A resumable, single-word learning journey. Only unfinished words enter recap.
 export function getFlow(state, now=new Date()) {
  const f=state.flow;
- if(f?.day===day(now)&&Array.isArray(f.studied)&&Array.isArray(f.pending)&&Array.isArray(f.reviewed)&&Array.isArray(f.reviewIds)&&Array.isArray(f.retried)) return f;
+ if(f&&(f.day===day(now)||f.draft||f.lookupDraft||f.suspended||f.phase==='review'||f.pending?.length)&&Array.isArray(f.studied)&&Array.isArray(f.pending)&&Array.isArray(f.reviewed)&&Array.isArray(f.reviewIds)&&Array.isArray(f.retried)) return f;
  return state.flow={day:day(now),active:false,phase:'home',studied:[],pending:[],reviewed:[],reviewIds:[],retried:[],position:0,currentId:null,reviewKind:null};
 }
 export function learnWord(flow,id) {
@@ -145,7 +145,7 @@ export function commitDraft(state,flow,now=new Date()) {
  const draft=flow.draft;if(!draft||!draft.meaning.trim())return false;
  const old=state.items.find(x=>x.id===draft.id);
  addItem(state,draft,now);
- if(old&&old.meaning!==draft.meaning){old.originalMeaning||=old.meaning;old.meaning=draft.meaning;old.meaningUpdatedAt=now.toISOString();}
+ if(old&&old.meaning!==draft.meaning){throw new Error('Use a separate sense ID before committing a different meaning');}
  learnWord(flow,draft.id);flow.draft=null;flow.lookupDraft=null;
  if(flow.phase==='group')beginReview(flow,flow.pending,'group');
  return true;
@@ -153,8 +153,8 @@ export function commitDraft(state,flow,now=new Date()) {
 export function recordReview(state,flow,id,rating,now=new Date()) {
  const item=state.items.find(x=>x.id===id);if(!item)return;
  const before=JSON.parse(JSON.stringify(flow));delete before.undo;
- const schedule={stage:item.stage,due:item.due,lastRating:item.lastRating,lastReview:item.lastReview,reviewUpdatedAt:item.reviewUpdatedAt};
- const again=rateItem(item,rating,now);advanceReview(flow,id,again);
+ const schedule={stage:item.stage,due:item.due,lastRating:item.lastRating,lastReview:item.lastReview,reviewUpdatedAt:item.reviewUpdatedAt,history:JSON.parse(JSON.stringify(item.history||[]))};
+ const again=rateItem(item,rating,now);if(again&&['due','today'].includes(flow.reviewKind))item.due=now.toISOString();advanceReview(flow,id,again);
  flow.undo={id,before,schedule,expectedRevision:item.reviewRevision||item.reviewUpdatedAt};flow.recall=null;
 }
 export function undoReview(state,flow,now=new Date()) {
@@ -163,4 +163,38 @@ export function undoReview(state,flow,now=new Date()) {
  for(const key of ['lastRating','lastReview'])if(undo.schedule[key]===undefined)undo.schedule[key]=null;
  const revision=new Date(Math.max(+now,(Date.parse(item.reviewUpdatedAt)||0)+1)).toISOString();Object.assign(item,undo.schedule,{reviewUpdatedAt:revision,reviewRevision:revision+':'+Math.random().toString(36).slice(2)});
  for(const key of Object.keys(flow))delete flow[key];Object.assign(flow,undo.before,{undo:null});return true;
+}
+
+
+// B2: one item remains one independently scheduled meaning. Legacy IDs stay stable.
+export const wordKey = word => word.trim().replace(/\s+/g,' ').toLowerCase();
+export function senseStatus(item,now=new Date()) {return !item.lastReview ? 'new' : Date.parse(item.due)<=+now ? 'due' : 'later';}
+export function dueItems(items,now=new Date()) {return items.filter(x=>Date.parse(x.due)<=+now).sort((a,b)=>(Date.parse(a.due)-Date.parse(b.due))||a.id.localeCompare(b.id));}
+export function wordGroups(items) {const map=new Map();for(const item of items){const key=wordKey(item.word);if(!map.has(key))map.set(key,{word:item.word,items:[]});map.get(key).items.push(item);}return [...map.values()];}
+export function searchBook(items,{query='',status='',list='',since='',sort='recent',page=0}={},now=new Date()) {
+ const q=query.trim().toLowerCase();let groups=wordGroups(items).filter(g=>g.items.some(x=>(!q||(x.word+' '+x.meaning).toLowerCase().includes(q))&&(!status||(status==='due'?Date.parse(x.due)<=+now:senseStatus(x,now)===status))&&(!list||(x.lists||[x.studyDay]).includes(list))&&(!since||(x.createdAt&&Number.isFinite(Date.parse(x.createdAt))?day(new Date(x.createdAt)):(x.studyDay||''))>=since)));
+ groups.sort((a,b)=>sort==='az'?a.word.localeCompare(b.word,'en'):Math.max(...b.items.map(x=>Date.parse(x.createdAt||x.studyDay)||0))-Math.max(...a.items.map(x=>Date.parse(x.createdAt||x.studyDay)||0))||a.word.localeCompare(b.word,'en'));
+ const pages=Math.max(1,Math.ceil(groups.length/20)),current=Math.min(Math.max(0,page),pages-1);return {total:groups.length,pages,page:current,rows:groups.slice(current*20,current*20+20)};
+}
+export function prepareSense(state,draft,list=day(),now=new Date()) {
+ const same=state.items.find(x=>wordKey(x.word)===wordKey(draft.word)&&x.meaning.trim()===draft.meaning.trim());
+ if(same)return {...same,lists:[...new Set([...(same.lists||[same.studyDay]).filter(Boolean),list])]};
+ const exists=state.items.some(x=>x.id===draft.id);return {...draft,id:exists?draft.id+'-sense-'+(+now)+'-'+Math.random().toString(36).slice(2):draft.id,createdAt:now.toISOString(),lists:[list],stage:0,lastReview:null,lastRating:null,history:[]};
+}
+export function previewImport(text,state) {
+ if(text.length>10000000)throw Error('备份超过10MB，请拆分后导入。');let data;try{data=JSON.parse(text);}catch{throw Error('文件不是有效的JSON备份。');}
+ if(data?.version!==1||!Array.isArray(data.items)||data.items.length>20000)throw Error('不支持的备份格式。');
+ const ids=new Set();for(const x of data.items){if(!x||typeof x.id!=='string'||!x.id||ids.has(x.id)||typeof x.word!=='string'||!x.word.trim()||x.word.length>200||typeof x.meaning!=='string'||!x.meaning.trim()||x.meaning.length>5000)throw Error('备份包含无效或重复的词义记录。');if(x.lists!==undefined&&(!Array.isArray(x.lists)||x.lists.some(v=>typeof v!=='string'||v.length>200)))throw Error('备份词单格式无效。');for(const k of ['due','studyDay','createdAt','lastReview'])if(x[k]!==undefined&&x[k]!==null&&typeof x[k]!=='string')throw Error('备份日期格式无效。');if(x.history!==undefined&&(!Array.isArray(x.history)||x.history.some(h=>!h||typeof h.at!=='string'||!Number.isFinite(Date.parse(h.at))||!['remember','uncertain','forgot'].includes(h.rating))))throw Error('备份练习历史格式无效。');ids.add(x.id);}
+ const additions=[],conflicts=[],duplicates=[];
+ for(const x of data.items){const same=state.items.find(y=>y.id===x.id);if(same){if(JSON.stringify(same)!==JSON.stringify(x))conflicts.push(x);else duplicates.push(x);}else if(state.items.some(y=>wordKey(y.word)===wordKey(x.word)&&y.meaning===x.meaning))duplicates.push(x);else additions.push(x);}
+ return {additions,conflicts,duplicates};
+}
+export function applyImport(state,preview,keepConflicts=false,now=new Date()) {
+ const incoming=[...preview.additions,...(keepConflicts?preview.conflicts:[])];let n=0;
+ for(const original of incoming){const x={};for(const key of ['id','word','meaning','stage','due','studyDay','createdAt','lastRating','lastReview','lists','history'])if(original[key]!==undefined)x[key]=JSON.parse(JSON.stringify(original[key]));if(state.items.some(y=>wordKey(y.word)===wordKey(x.word)&&y.meaning===x.meaning))continue;
+ while(state.items.some(y=>y.id===x.id))x.id+='-import-'+(+now)+'-'+n;
+ // Imported content never supplies executable markup. Untrusted audio URLs and segmentation are not accepted.
+ delete x.audio;delete x.syllables;delete x.syllablesVerified;
+ if(!Number.isFinite(Date.parse(x.due)))x.due=now.toISOString();x.stage=Math.max(0,Math.min(3,Number(x.stage)||0));state.items.push(x);n++;}
+ return n;
 }
