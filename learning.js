@@ -8,7 +8,7 @@ export function loadState(storage) {
 }
 export function addItem(state,item,now=new Date()) {
  const old=state.items.find(x=>x.id===item.id);
- if(old) {old.studyDay=day(now); return false;}
+ if(old) return false;
  state.items.push({...item,studyDay:day(now),due:now.toISOString(),stage:0});
  return true;
 }
@@ -37,11 +37,11 @@ export function mergeStates(local, remote) {
 // A resumable, single-word learning journey. Only unfinished words enter recap.
 export function getFlow(state, now=new Date()) {
  const f=state.flow;
- if(f&&(f.day===day(now)||f.draft||f.lookupDraft||f.suspended||f.phase==='review'||f.pending?.length)&&Array.isArray(f.studied)&&Array.isArray(f.pending)&&Array.isArray(f.reviewed)&&Array.isArray(f.reviewIds)&&Array.isArray(f.retried)) return f;
+ if(f&&Array.isArray(f.studied)&&Array.isArray(f.pending)&&Array.isArray(f.reviewed)&&Array.isArray(f.reviewIds)&&Array.isArray(f.retried)) return f;
  return state.flow={day:day(now),active:false,phase:'home',studied:[],pending:[],reviewed:[],reviewIds:[],retried:[],position:0,currentId:null,reviewKind:null};
 }
 export function learnWord(flow,id) {
- if(!flow.studied.includes(id)){flow.studied.push(id);flow.pending.push(id);}
+ if(!flow.studied.includes(id))flow.studied.push(id);if(!flow.pending.includes(id)&&!flow.reviewed.includes(id))flow.pending.push(id);
  flow.currentId=null;flow.phase=flow.pending.length>=3?'group':'input';
 }
 export function beginReview(flow,ids,kind) {
@@ -144,17 +144,18 @@ export function senseOptions(meaning) {
 export function commitDraft(state,flow,now=new Date()) {
  const draft=flow.draft;if(!draft||!draft.meaning.trim())return false;
  const old=state.items.find(x=>x.id===draft.id);
- addItem(state,draft,now);
+ const added=addItem(state,draft,now);if(added){const item=state.items.at(-1);item.learningStatus='initial';item.createdAt||=now.toISOString();item.due=null;}
  if(old&&old.meaning!==draft.meaning){throw new Error('Use a separate sense ID before committing a different meaning');}
- learnWord(flow,draft.id);flow.draft=null;flow.lookupDraft=null;
+ const alreadyQueued=flow.recapQueue?.some(task=>task.pending?.includes(draft.id)||task.reviewIds?.includes(draft.id));
+ flow.waiting=flow.waiting?.filter(id=>id!==draft.id)||[];if(old?.learningStatus==='waiting')old.learningStatus='initial';if(!alreadyQueued&&!old?.lastReview)learnWord(flow,draft.id);else flow.phase='input';flow.draft=null;flow.lookupDraft=null;
  if(flow.phase==='group')beginReview(flow,flow.pending,'group');
  return true;
 }
 export function recordReview(state,flow,id,rating,now=new Date()) {
  const item=state.items.find(x=>x.id===id);if(!item)return;
  const before=JSON.parse(JSON.stringify(flow));delete before.undo;
- const schedule={stage:item.stage,due:item.due,lastRating:item.lastRating,lastReview:item.lastReview,reviewUpdatedAt:item.reviewUpdatedAt,history:JSON.parse(JSON.stringify(item.history||[]))};
- const again=rateItem(item,rating,now);if(again&&['due','today'].includes(flow.reviewKind))item.due=now.toISOString();advanceReview(flow,id,again);
+ const schedule={learningStatus:item.learningStatus,stage:item.stage,due:item.due,lastRating:item.lastRating,lastReview:item.lastReview,reviewUpdatedAt:item.reviewUpdatedAt,history:JSON.parse(JSON.stringify(item.history||[]))};
+ const again=rateItem(item,rating,now);item.learningStatus='scheduled';if(again&&['due','today'].includes(flow.reviewKind))item.due=now.toISOString();advanceReview(flow,id,again);
  flow.undo={id,before,schedule,expectedRevision:item.reviewRevision||item.reviewUpdatedAt};flow.recall=null;
 }
 export function undoReview(state,flow,now=new Date()) {
@@ -169,7 +170,7 @@ export function undoReview(state,flow,now=new Date()) {
 // B2: one item remains one independently scheduled meaning. Legacy IDs stay stable.
 export const wordKey = word => word.trim().replace(/\s+/g,' ').toLowerCase();
 export function senseStatus(item,now=new Date()) {return !item.lastReview ? 'new' : Date.parse(item.due)<=+now ? 'due' : 'later';}
-export function dueItems(items,now=new Date()) {return items.filter(x=>Date.parse(x.due)<=+now).sort((a,b)=>(Date.parse(a.due)-Date.parse(b.due))||a.id.localeCompare(b.id));}
+export function dueItems(items,now=new Date()) {return items.filter(x=>!['waiting','initial'].includes(x.learningStatus)&&Date.parse(x.due)<=+now).sort((a,b)=>(Date.parse(a.due)-Date.parse(b.due))||a.id.localeCompare(b.id));}
 export function wordGroups(items) {const map=new Map();for(const item of items){const key=wordKey(item.word);if(!map.has(key))map.set(key,{word:item.word,items:[]});map.get(key).items.push(item);}return [...map.values()];}
 export function searchBook(items,{query='',status='',list='',since='',sort='recent',page=0}={},now=new Date()) {
  const q=query.trim().toLowerCase();let groups=wordGroups(items).filter(g=>g.items.some(x=>(!q||(x.word+' '+x.meaning).toLowerCase().includes(q))&&(!status||(status==='due'?Date.parse(x.due)<=+now:senseStatus(x,now)===status))&&(!list||(x.lists||[x.studyDay]).includes(list))&&(!since||(x.createdAt&&Number.isFinite(Date.parse(x.createdAt))?day(new Date(x.createdAt)):(x.studyDay||''))>=since)));
@@ -191,11 +192,11 @@ export function previewImport(text,state) {
 }
 export function applyImport(state,preview,keepConflicts=false,now=new Date()) {
  const incoming=[...preview.additions,...(keepConflicts?preview.conflicts:[])];let n=0;
- for(const original of incoming){const x={};for(const key of ['id','word','meaning','stage','due','studyDay','createdAt','lastRating','lastReview','lists','history'])if(original[key]!==undefined)x[key]=JSON.parse(JSON.stringify(original[key]));if(state.items.some(y=>wordKey(y.word)===wordKey(x.word)&&y.meaning===x.meaning))continue;
+ for(const original of incoming){const x={};for(const key of ['id','word','meaning','stage','due','studyDay','createdAt','lastRating','lastReview','lists','history','learningStatus'])if(original[key]!==undefined)x[key]=JSON.parse(JSON.stringify(original[key]));if(state.items.some(y=>wordKey(y.word)===wordKey(x.word)&&y.meaning===x.meaning))continue;
  while(state.items.some(y=>y.id===x.id))x.id+='-import-'+(+now)+'-'+n;
  // Imported content never supplies executable markup. Untrusted audio URLs and segmentation are not accepted.
  delete x.audio;delete x.syllables;delete x.syllablesVerified;
- if(!Number.isFinite(Date.parse(x.due)))x.due=now.toISOString();x.stage=Math.max(0,Math.min(3,Number(x.stage)||0));state.items.push(x);n++;}
+ if(['waiting','initial'].includes(x.learningStatus))x.due=null;else if(!Number.isFinite(Date.parse(x.due)))x.due=now.toISOString();x.stage=Math.max(0,Math.min(3,Number(x.stage)||0));state.items.push(x);n++;}
  return n;
 }
 
@@ -212,4 +213,48 @@ export function pronunciationInfo(item) {
  // Optional exact-match US dictionary result; backup import never accepts this metadata.
  if(item.ipaSource==='dictionaryapi.dev'&&item.audio?.dialect==='en-US'&&typeof item.ipa==='string'&&item.ipa.length<=160&&/^[/\[].+[/\]]$/.test(item.ipa))return {ipa:item.ipa,note:'免费词典的美式读音音标；见录音及词义来源'};
  return {ipa:null,note:''};
+}
+
+
+// B3: independent resumable sessions. No calendar reset is allowed to discard work.
+const cloneTask = value => JSON.parse(JSON.stringify(value));
+export function blankSession(now=new Date()) {return {day:day(now),active:false,phase:'input',studied:[],pending:[],reviewed:[],reviewIds:[],retried:[],position:0,currentId:null,reviewKind:null,intake:[],waiting:[],recapQueue:[],draftQueue:[]};}
+export function getSessions(state,now=new Date()) {
+ if(!state.sessions){
+  const legacy=getFlow(state,now),isDue=['due','today'].includes(legacy.reviewKind)&&(legacy.phase==='review'||legacy.suspended==='review');
+  state.sessions={learning:isDue?cloneTask(legacy.returnFlow||blankSession(now)):legacy,due:isDue?legacy:blankSession(now)};
+  state.activeSession=isDue?'due':'learning';
+ }
+ for(const key of ['learning','due']){const task=state.sessions[key]||=blankSession(now);for(const field of ['intake','waiting','recapQueue','draftQueue'])task[field]||=[];delete task.returnFlow;delete task.resumeAfterReview;}
+ const learning=state.sessions.learning;const initialIds=new Set([...learning.pending,...learning.recapQueue.flatMap(x=>x.pending||x.reviewIds||[])]);for(const item of state.items)if(initialIds.has(item.id)&&!item.lastReview){item.learningStatus='initial';item.due=null;}
+ const assigned=new Set([...learning.pending,...learning.waiting,...learning.recapQueue.flatMap(x=>x.pending||x.reviewIds||[])]);for(const item of state.items){if(['waiting','initial'].includes(item.learningStatus)&&!assigned.has(item.id)){learning.waiting.push(item.id);item.learningStatus='waiting';}}
+ state.flow=state.sessions[state.activeSession==='due'?'due':'learning'];return state.sessions;
+}
+export function activateSession(state,key){const sessions=getSessions(state);state.activeSession=key;state.flow=sessions[key];return state.flow;}
+export function parkLearning(flow){
+ if(flow.suspended){flow.phase=flow.suspended;delete flow.suspended;}
+ if(flow.phase==='review'&&['group','finish'].includes(flow.reviewKind)){
+  const snapshot=cloneTask(flow);for(const k of ['recapQueue','draftQueue','intake','waiting','draft','lookupDraft','typedQuery','undo','studied','reviewed'])delete snapshot[k];flow.recapQueue.push(snapshot);flow.pending=[];
+ }else if(flow.pending.length){flow.recapQueue.push({pending:[...flow.pending],reviewIds:[...flow.pending],reviewInitialCount:flow.pending.length,position:0,retried:[],recall:null,phase:'review',reviewKind:'group'});flow.pending=[];}
+ if(flow.draft||flow.lookupDraft||flow.typedQuery){if(flow.fromIntake)flow.intake.shift();flow.draftQueue.push({draft:flow.draft,lookupDraft:flow.lookupDraft,typedQuery:flow.typedQuery,currentId:flow.currentId,fromIntake:false,listName:flow.listName,draftList:flow.draftList});}
+ flow.phase='input';flow.draft=null;flow.lookupDraft=null;flow.typedQuery='';flow.fromIntake=false;flow.recall=null;flow.undo=null;
+}
+export function resumeLearning(flow){
+ if(flow.suspended){flow.phase=flow.suspended;delete flow.suspended;return;}
+ if(flow.phase==='review'||flow.draft||flow.lookupDraft||flow.typedQuery?.trim())return;
+ if(flow.pending.length){beginReview(flow,flow.pending,'group');return;}
+ if(flow.recapQueue.length){const task=flow.recapQueue.shift();Object.assign(flow,task);return;}
+ if(flow.draftQueue.length){Object.assign(flow,flow.draftQueue.shift());flow.phase=flow.draft?'study':'input';return;}
+ flow.phase='input';
+}
+export function saveWaiting(state,flow,now=new Date()){
+ const draft=flow.draft;if(!draft?.meaning.trim())return false;
+ const item=prepareSense(state,draft,flow.draftList||flow.listName||day(now),now);const existing=state.items.find(x=>x.id===item.id);
+ if(!existing){addItem(state,item,now);const saved=state.items.at(-1);saved.learningStatus='waiting';saved.due=null;if(!flow.waiting.includes(saved.id))flow.waiting.push(saved.id);}
+ else existing.lists=item.lists;
+ flow.draft=null;flow.lookupDraft=null;flow.typedQuery='';flow.phase='input';flow.undo=null;return true;
+}
+export function dailyStats(state,now=new Date()){
+ const today=day(now),onDay=at=>at&&Number.isFinite(Date.parse(at))&&day(new Date(at))===today;
+ return {added:state.items.filter(x=>onDay(x.createdAt)||!x.createdAt&&x.studyDay===today).length,reviewed:state.items.filter(x=>(x.history||[]).some(h=>onDay(h.at))).length,attempts:state.items.reduce((n,x)=>n+(x.history||[]).filter(h=>onDay(h.at)).length,0),groups:(state.completedGroups||[]).filter(x=>x.day===today).length};
 }

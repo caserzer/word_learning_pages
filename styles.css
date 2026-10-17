@@ -10,3 +10,6 @@
 
 /* Pronunciation stays directly below spelling in every learning state. */
 .phonetic{font-family:"Segoe UI","Arial",sans-serif;font-size:18px;line-height:1.5;color:var(--muted);margin:8px 0 20px;overflow-wrap:anywhere;letter-spacing:normal}.new-word .word{font-size:44px;line-height:1.25}.new-word .phonetic{margin:0 0 4px}#word-detail>.word{margin:18px 0 8px}@media(max-width:800px){.phonetic{font-size:17px}.new-word .word{font-size:36px}}
+
+/* B3: one clear add entry remains available without burying the current word. */
+body[data-view=home] .work-rail{display:none}body[data-view=home] .workspace-grid{display:block}#home{max-width:850px}#home h1{font-size:36px}#home-pending{margin:24px 0 12px}#home-stats{font-size:18px;max-width:34em}#batch-entry{margin:12px 0}#batch-entry>summary{font-size:16px}#batch-entry form{padding:12px 0}#single-entry>summary{font-size:16px;color:var(--ink)}#add-new{white-space:nowrap}.topbar #close{margin-left:0}#saved-drafts{margin-top:12px}@media(max-width:800px){#home{width:100%}#home h1{font-size:30px}.topbar #add-new{margin-left:auto}.topbar #close{padding-inline:8px;font-size:14px}#main-panel{width:100%}.topbar .brand{font-size:18px}}
