@@ -1,11 +1,12 @@
-import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,pronunciationInfo,reviewProgress,senseOptions,commitDraft,recordReview,undoReview,wordKey,wordGroups,searchBook,dueItems,prepareSense,previewImport,applyImport,getSessions,activateSession,parkLearning,resumeLearning,saveWaiting,dailyStats} from './learning.js?v=eea0326e75caff4e';
+import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,pronunciationInfo,reviewProgress,senseOptions,commitDraft,recordReview,undoReview,wordKey,wordGroups,searchBook,dueItems,prepareSense,previewImport,applyImport,getSessions,activateSession,parkLearning,resumeLearning,saveWaiting,dailyStats,createSync,mergeCloud,restoreTask} from './learning.js?v=66adc232ab015507';
 const $=id=>document.getElementById(id),base=(window.WORD_LEARNING_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
-let storage;try{storage=window.localStorage;}catch{}
+let sync=null;
+let storage;try{storage=window.localStorage;if(storage.getItem('word-learning-before-cloud-v1')===null)storage.setItem('word-learning-before-cloud-v1',storage.getItem('word-learning-v1')||JSON.stringify({version:1,items:[]}));}catch{}
 const state=loadState(storage),sessions=getSessions(state);let flow=state.flow;
 const bookState=state.bookState||{query:'',status:'',list:'',since:'',sort:'recent',page:0};state.bookState=bookState;let importPreview=null;
 let view=state.workspaceView||(flow.phase!=='input'||flow.draft||flow.lookupDraft?'today':'home'),searchVersion=0,activeItem=null,audio=null,audioTimer=null,speechGeneration=0,audioButton=null,bookEditId=null,bookReturnView='today';
-function mergeLatest(){const merged=mergeStates(state,loadState(storage));for(const item of merged.items){const current=state.items.find(x=>x.id===item.id);if(current)Object.assign(current,item);else state.items.push(item);}}
-function save(){try{mergeLatest();state.workspaceView=view;storage.setItem('word-learning-v1',JSON.stringify(state));$('storage-warning').hidden=true;}catch{$('storage-warning').hidden=false;}}
+function mergeLatest(){if(sync?.ready){applyCloudState(mergeCloud(state,loadState(storage)),false);return;}const merged=mergeStates(state,loadState(storage));for(const item of merged.items){const current=state.items.find(x=>x.id===item.id);if(current)Object.assign(current,item);else state.items.push(item);}}
+function save(){try{state.workspaceView=view;sync?.capture();mergeLatest();storage.setItem('word-learning-v1',JSON.stringify(state));sync?.saved();$('storage-warning').hidden=true;}catch{$('storage-warning').hidden=false;}}
 function audioState(button,message){if(audioButton)audioButton.textContent=button;$('audio-status').textContent=message;}
 function stopAudio(){audioState('听发音','');speechGeneration++;clearTimeout(audioTimer);if(audio){audio.pause();audio=null;}window.speechSynthesis?.cancel();}
 function say(item,button=$('speak')){
@@ -19,7 +20,7 @@ function say(item,button=$('speak')){
   utterance.rate=.85;utterance.onerror=()=>{if(generation===speechGeneration)audioState('重试发音','朗读暂时不可用，请检查设备语音设置。');};utterance.onstart=()=>{if(generation===speechGeneration)audioState('正在朗读','设备英语朗读');};utterance.onend=()=>{if(generation===speechGeneration)audioState('再听一次','设备朗读结束');};
   audioState('设备朗读…','正在准备设备英语朗读…');try{synth.speak(utterance);}catch{utterance.onerror();}
  };
- if(item.audio?.audioUrl){
+ if(safeLink(item.audio?.audioUrl)){
   let fellBack=false,recording;const fail=()=>{if(fellBack||generation!==speechGeneration)return;fellBack=true;clearTimeout(audioTimer);recording?.pause();fallback();};
   try{recording=new Audio(item.audio.audioUrl);audio=recording;recording.onerror=fail;recording.onplaying=()=>{if(!fellBack&&generation===speechGeneration){clearTimeout(audioTimer);audioState('正在播放','美式录音播放中');}};recording.onended=()=>{if(!fellBack&&generation===speechGeneration){clearTimeout(audioTimer);audioState('再听一次','录音播放结束');}};audioTimer=setTimeout(fail,8000);recording.play().catch(fail);}catch{fail();}
  }else fallback();
@@ -107,7 +108,7 @@ $('draft-sense').onchange=()=>{$('draft-meaning').value=$('draft-sense').value;$
 $('draft-audio').onclick=()=>flow.draft&&say(flow.draft,$('draft-audio'));$('speak').onclick=()=>activeItem&&say(activeItem);
 $('recall-known').onclick=()=>reveal('known');$('recall-hint').onclick=()=>reveal('hint');$('hint-next').onclick=()=>score('uncertain');
 document.querySelectorAll('[data-rating]').forEach(b=>b.onclick=()=>score(b.dataset.rating));
-$('undo').onclick=()=>{stopAudio();const remote=itemFromStorage(flow.undo?.id);if(flow.undo&&remote&&(remote.reviewRevision||remote.reviewUpdatedAt||remote.lastReview)!==flow.undo.expectedRevision){flow.undo=null;mergeLatest();$('status').textContent='这个词已在另一处更新，不能覆盖较新的记录。';save();render();return;}mergeLatest();const groupId=flow.undo?.completedGroupId;if(!undoReview(state,flow)){$('status').textContent='这个词已在另一处更新，不能覆盖较新的记录。';save();render();return;}if(groupId)state.completedGroups=state.completedGroups.filter(x=>x.id!==groupId);view='today';save();render();$('status').textContent='已撤销上一笔，请重新核对。';$('prompt').focus();};
+$('undo').onclick=()=>{stopAudio();const remote=itemFromStorage(flow.undo?.id);if(flow.undo&&remote&&(remote.reviewRevision||remote.reviewUpdatedAt||remote.lastReview)!==flow.undo.expectedRevision){flow.undo=null;mergeLatest();$('status').textContent='这个词已在另一处更新，不能覆盖较新的记录。';save();render();return;}mergeLatest();const groupId=flow.undo?.completedGroupId;if(!undoReview(state,flow)){$('status').textContent='这个词已在另一处更新，不能覆盖较新的记录。';save();render();return;}if(groupId){state.completedGroups=state.completedGroups.filter(x=>x.id!==groupId);state.removedGroupIds=[...new Set([...(state.removedGroupIds||[]),groupId])];}view='today';save();render();$('status').textContent='已撤销上一笔，请重新核对。';$('prompt').focus();};
 $('close').onclick=()=>switchView('home');
 $('nav-today').onclick=()=>switchView('home');$('nav-due').onclick=()=>switchView('due');
 $('due').onclick=()=>review(dueItems(state.items).slice(0,Number($('batch-size').value)||10).map(x=>x.id),'due');$('today').onclick=()=>review(state.items.filter(x=>x.studyDay===day()&&!['waiting','initial'].includes(x.learningStatus)).map(x=>x.id),'today');
@@ -131,14 +132,15 @@ function openDetail(id){const item=itemById(id);if(!item)return;if(flow.phase===
 }
 $('open-book').onclick=()=>openBook();$('book-back').onclick=()=>{bookEditId=null;$('word-detail').hidden=true;$('book-list').hidden=false;$('book-browse').hidden=false;switchView(bookReturnView);if(view==='today'&&flow.phase==='review')$('prompt').focus();else if(view==='today'&&flow.draft)$('draft-word').focus();};$('book-query').oninput=()=>filterBook();
 $('book-cancel').onclick=()=>{const id=bookEditId;bookEditId=null;renderBook();openDetail(id);};$('book-editor').onsubmit=e=>{e.preventDefault();const item=itemById(bookEditId),meaning=$('book-meaning').value.trim();if(!item||!meaning)return;item.originalMeaning||=item.meaning;item.meaning=meaning;item.meaningUpdatedAt=new Date().toISOString();if(flow.draft?.id===item.id){flow.draft.originalMeaning||=item.originalMeaning;flow.draft.meaning=meaning;}for(const task of [sessions.learning,sessions.due,...sessions.learning.recapQueue])if(task?.reviewIds?.[task.position]===item.id)task.recall=null;save();bookEditId=null;renderBook();openDetail(item.id);$('status').textContent='词义已修改。学习和回顾位置没有改变。';};
+function safeLink(value){try{return typeof value==='string'&&new URL(value).protocol==='https:';}catch{return false;}}
 function sourceDetails(item){
  const details=document.createElement('details'),summary=document.createElement('summary');
  summary.textContent='资料来源';details.append(summary);
  const pronunciation=pronunciationInfo(item);if(pronunciation.note){const note=document.createElement('p');note.textContent=pronunciation.note;details.append(note);}
  const p=document.createElement('p');p.textContent=item.pages?.length?'词表 PDF 第 '+item.pages.join('、')+' 页':'自行录入或免费词典补充';details.append(p);
- if(item.audio){const a=document.createElement('a');a.href=item.audio.descriptionUrl;a.target='_blank';a.rel='noopener';a.textContent=(item.audio.artist||'录音作者')+' · '+item.audio.license;details.append(a);}
- if(item.translationSource){const a=document.createElement('a');a.href=item.translationSource;a.textContent='释义来源：'+(item.translationProvider||'MyMemory');details.append(a);}
- for(const definition of item.definitions||[]){const a=document.createElement('a');a.href=definition.source;a.target='_blank';a.rel='noopener';a.textContent='词义来源 '+(definition.license?.name||'');details.append(a);}
+ if(safeLink(item.audio?.descriptionUrl)){const a=document.createElement('a');a.href=item.audio.descriptionUrl;a.target='_blank';a.rel='noopener';a.textContent=(item.audio.artist||'录音作者')+' · '+item.audio.license;details.append(a);}
+ if(safeLink(item.translationSource)){const a=document.createElement('a');a.href=item.translationSource;a.textContent='释义来源：'+(item.translationProvider||'MyMemory');details.append(a);}
+ for(const definition of Array.isArray(item.definitions)?item.definitions:[]){if(!safeLink(definition.source))continue;const a=document.createElement('a');a.href=definition.source;a.target='_blank';a.rel='noopener';a.textContent='词义来源 '+(definition.license?.name||'');details.append(a);}
  return details;
 }
 async function renderNewWord(q,version){
@@ -234,3 +236,33 @@ function stashDraft(nextQuery){
   flow.draft=null;flow.lookupDraft=null;flow.fromIntake=false;
  }
 }
+
+
+
+// Sync never blocks learning. The original local JSON is kept outside the live state.
+function applyCloudState(next,paint=true){
+ const changed=JSON.stringify(state.sessions)!==JSON.stringify(next.sessions)||state.activeSession!==next.activeSession;
+ const itemsChanged=JSON.stringify(state.items)!==JSON.stringify(next.items);
+ const currentBook=state.bookState;Object.assign(state,next);state.bookState=currentBook;
+ if(next.sessions){Object.assign(sessions,next.sessions);state.sessions=sessions;flow=sessions[state.activeSession==='due'?'due':'learning'];state.flow=flow;}
+ if(changed&&!bookEditId){stopAudio();searchVersion++;view=state.workspaceView||'home';}
+ if(paint&&!bookEditId&&(changed||itemsChanged)){render();if(changed)restoreLookup();}
+ if(paint)renderSyncBranches();
+}
+function renderSyncBranches(){
+ const target=$('sync-branches');target.replaceChildren();
+ for(const task of state.cloud?.tasks||[]){if(task.id===state.cloud.selected)continue;
+  const row=document.createElement('p'),button=document.createElement('button');button.className='quiet';
+  button.textContent='继续另一份未完成进度'+(task.at?'（'+new Date(task.at).toLocaleString('zh-CN')+'）':'');button.onclick=()=>{save();const next=JSON.parse(JSON.stringify(state));if(restoreTask(next,task.id)){applyCloudState(next);save();$('sync-status').textContent='已恢复这份进度，其他进度仍保留。';}};
+  row.append(button);target.append(row);
+ }
+}
+sync=createSync({storage,base,getState:()=>state,applyState:applyCloudState,fetcher:fetch,setTimer:setTimeout,clearTimer:clearTimeout,onStatus:(text,kind)=>{const extra=Math.max(0,(state.cloud?.tasks?.length||0)-1);$('sync-status').textContent=text+(extra?' · 另有 '+extra+' 份进度，可展开云同步继续':'');$('sync-status').dataset.kind=kind;}});
+$('sync-connect').onsubmit=e=>{e.preventDefault();try{sync.unlock($('sync-key').value.trim(),$('sync-remember').checked);$('sync-key').value='';}catch(error){$('sync-status').textContent=error.message;$('sync-key').focus();}};
+$('sync-now').onclick=()=>void sync.run();
+window.addEventListener?.('online',()=>void sync.run());
+window.addEventListener?.('focus',()=>void sync.run());
+window.addEventListener?.('storage',e=>{if(e.key==='word-learning-v1'){sync.capture();mergeLatest();render();renderSyncBranches();void sync.run();}});
+renderSyncBranches();sync.start();
+
+$('backup-original').onclick=()=>{const raw=storage?.getItem('word-learning-before-cloud-v1');if(!raw){$('import-status').textContent='未找到升级前备份，请下载当前完整备份。';return;}const u=URL.createObjectURL(new Blob([raw],{type:'application/json'})),a=document.createElement('a');a.href=u;a.download='word-learning-before-cloud.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);};

@@ -1,3 +1,5 @@
+export {createSync,mergeCloud,captureTask,restoreTask,normalizeHistory,newId} from './sync.js?v=65adec0897fe27e0';
+import {normalizeHistory,newId} from './sync.js?v=65adec0897fe27e0';
 export const day = (now=new Date()) => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 export function loadState(storage) {
  try {
@@ -17,7 +19,7 @@ export function rateItem(item,rating,now=new Date()) {
  item.stage=rating==='remember'?Math.min((item.stage||0)+1,3):0;
  const days=rating==='remember'?[1,1,3,7][item.stage]:1;
  item.due=new Date(+now+days*86400000).toISOString();
- item.history=[...(item.history||[]),{at:now.toISOString(),rating}];item.lastRating=rating;item.lastReview=now.toISOString();item.reviewUpdatedAt=new Date(Math.max(+now,(Date.parse(item.reviewUpdatedAt)||0)+1)).toISOString();item.reviewRevision=item.reviewUpdatedAt+':'+Math.random().toString(36).slice(2);
+ normalizeHistory(item);item.lastReviewEventId=newId();item.history=[...(item.history||[]),{id:item.lastReviewEventId,at:now.toISOString(),rating}];item.lastRating=rating;item.lastReview=now.toISOString();item.reviewUpdatedAt=new Date(Math.max(+now,(Date.parse(item.reviewUpdatedAt)||0)+1)).toISOString();item.reviewRevision=item.reviewUpdatedAt+':'+Math.random().toString(36).slice(2);
  // Self-report schedules practice; it never sets a mastered flag.
  return rating!=='remember';
 }
@@ -153,15 +155,24 @@ export function commitDraft(state,flow,now=new Date()) {
 }
 export function recordReview(state,flow,id,rating,now=new Date()) {
  const item=state.items.find(x=>x.id===id);if(!item)return;
- const before=JSON.parse(JSON.stringify(flow));delete before.undo;
- const schedule={learningStatus:item.learningStatus,stage:item.stage,due:item.due,lastRating:item.lastRating,lastReview:item.lastReview,reviewUpdatedAt:item.reviewUpdatedAt,history:JSON.parse(JSON.stringify(item.history||[]))};
+ normalizeHistory(item);const before=JSON.parse(JSON.stringify(flow));delete before.undo;
+ const schedule={learningStatus:item.learningStatus,stage:item.stage,due:item.due,lastRating:item.lastRating,lastReview:item.lastReview,lastReviewEventId:item.lastReviewEventId,reviewUpdatedAt:item.reviewUpdatedAt,history:JSON.parse(JSON.stringify(item.history||[]))};
+ item.reviewBase||=Object.fromEntries(['stage','due','lastRating','lastReview','lastReviewEventId','learningStatus'].map(k=>[k,schedule[k]??null]));
  const again=rateItem(item,rating,now);item.learningStatus='scheduled';if(again&&['due','today'].includes(flow.reviewKind))item.due=now.toISOString();advanceReview(flow,id,again);
- flow.undo={id,before,schedule,expectedRevision:item.reviewRevision||item.reviewUpdatedAt};flow.recall=null;
+ item.history.at(-1).schedule={stage:item.stage,due:item.due,lastRating:item.lastRating,lastReview:item.lastReview,lastReviewEventId:item.lastReviewEventId,learningStatus:item.learningStatus};
+ flow.undo={id,before,schedule,eventId:item.history.at(-1).id,expectedRevision:item.reviewRevision||item.reviewUpdatedAt};flow.recall=null;
 }
 export function undoReview(state,flow,now=new Date()) {
  const undo=flow.undo;if(!undo)return false;const item=state.items.find(x=>x.id===undo.id);
  if(!item||(item.reviewRevision||item.reviewUpdatedAt||item.lastReview)!==undo.expectedRevision){flow.undo=null;return false;}
- for(const key of ['lastRating','lastReview'])if(undo.schedule[key]===undefined)undo.schedule[key]=null;
+ item.reviewBase||=Object.fromEntries(['stage','due','lastRating','lastReview','lastReviewEventId','learningStatus'].map(k=>[k,undo.schedule[k]??null]));
+ for(const key of ['lastRating','lastReview','lastReviewEventId'])if(undo.schedule[key]===undefined)undo.schedule[key]=null;
+ normalizeHistory(item);normalizeHistory(undo.schedule);delete undo.schedule.removedReviewIds;const keep=new Set((undo.schedule.history||[]).map(h=>h.id));
+ const eventId=undo.eventId||item.history.filter(h=>!keep.has(h.id)&&h.at===item.lastReview&&h.rating===item.lastRating).at(-1)?.id;
+ item.removedReviewIds=[...new Set([...(item.removedReviewIds||[]),...(eventId?[eventId]:[])])];
+ const retained=item.history.filter(h=>h.id!==eventId);
+ const later=retained.filter(h=>h.schedule&&!keep.has(h.id)&&Date.parse(h.at)>(Date.parse(undo.schedule.lastReview)||0)).sort((a,b)=>a.at.localeCompare(b.at)).at(-1);
+ if(later)Object.assign(undo.schedule,later.schedule);undo.schedule.history=retained;
  const revision=new Date(Math.max(+now,(Date.parse(item.reviewUpdatedAt)||0)+1)).toISOString();Object.assign(item,undo.schedule,{reviewUpdatedAt:revision,reviewRevision:revision+':'+Math.random().toString(36).slice(2)});
  for(const key of Object.keys(flow))delete flow[key];Object.assign(flow,undo.before,{undo:null});return true;
 }
@@ -258,3 +269,4 @@ export function dailyStats(state,now=new Date()){
  const today=day(now),onDay=at=>at&&Number.isFinite(Date.parse(at))&&day(new Date(at))===today;
  return {added:state.items.filter(x=>onDay(x.createdAt)||!x.createdAt&&x.studyDay===today).length,reviewed:state.items.filter(x=>(x.history||[]).some(h=>onDay(h.at))).length,attempts:state.items.reduce((n,x)=>n+(x.history||[]).filter(h=>onDay(h.at)).length,0),groups:(state.completedGroups||[]).filter(x=>x.day===today).length};
 }
+
