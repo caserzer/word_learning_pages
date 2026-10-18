@@ -31,6 +31,15 @@ jobs:
         run: |
           mkdir _site
           cp index.html styles.css app.js config.js learning.js sync.js .nojekyll _site/
+          node --input-type=module <<'NODE'
+          import { readdirSync, readFileSync, existsSync } from 'node:fs';
+          for (const file of readdirSync('_site').filter(x => x.endsWith('.js'))) {
+            for (const match of readFileSync('_site/' + file, 'utf8').matchAll(/(?:from\s*|import\s*)['"]\.\/([^'"]+)['"]/g)) {
+              const dependency = match[1].split('?')[0];
+              if (!existsSync('_site/' + dependency)) throw Error(file + ' imports missing public module ' + dependency);
+            }
+          }
+          NODE
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3
         with:
