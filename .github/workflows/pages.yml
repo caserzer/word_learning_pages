@@ -46,3 +46,17 @@ jobs:
           path: _site
       - id: deployment
         uses: actions/deploy-pages@v4
+      - name: Smoke test live app bootstrap in isolated Chromium
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          timeout 45 google-chrome --headless --no-sandbox --disable-gpu --disable-dev-shm-usage --disable-background-networking --disable-sync --no-first-run --user-data-dir="$(mktemp -d)" --virtual-time-budget=10000 --dump-dom "$PAGE_URL" > /tmp/word-learning-public-dom.html
+          node --input-type=module <<'NODE'
+          import { readFileSync } from 'node:fs';
+          import assert from 'node:assert/strict';
+          const dom = readFileSync('/tmp/word-learning-public-dom.html', 'utf8');
+          assert.ok(dom.includes('记录已保存在本机；填写同步口令后自动合并旧记录。'), 'App modules must execute and show the local-only sync state');
+          assert.ok(dom.includes('id="sync-key"') && dom.includes('id="cloud-sync"'), 'Sync setup panel must be present');
+          assert.ok(dom.includes('今天新增 0 个义项'), 'Learning home must initialize in the fresh browser');
+          console.log('Live Chromium app bootstrap and cloud setup panel passed with empty isolated browser storage.');
+          NODE
