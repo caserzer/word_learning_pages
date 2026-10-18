@@ -57,6 +57,16 @@ jobs:
           const dom = readFileSync('/tmp/word-learning-public-dom.html', 'utf8');
           assert.ok(dom.includes('记录已保存在本机；填写同步口令后自动合并旧记录。'), 'App modules must execute and show the local-only sync state');
           assert.ok(dom.includes('id="sync-key"') && dom.includes('id="cloud-sync"'), 'Sync setup panel must be present');
-          assert.ok(dom.includes('今天新增 0 个义项'), 'Learning home must initialize in the fresh browser');
+          assert.ok(dom.includes('今日自评 0 个义项 · 0 次练习'), 'Learning home must initialize in the fresh browser');
           console.log('Live Chromium app bootstrap and cloud setup panel passed with empty isolated browser storage.');
+          NODE
+      - name: Verify live sync rejects unauthenticated access
+        run: |
+          node --input-type=module <<'NODE'
+          for (const method of ['GET', 'PUT']) {
+            const response = await fetch('https://word-learning-api.caserzer.workers.dev/api/sync', { method, redirect: 'error', signal: AbortSignal.timeout(20000) });
+            await response.body?.cancel();
+            if (![401, 503].includes(response.status) || response.headers.get('Cache-Control') !== 'no-store') throw Error('Private sync must fail closed: ' + method + ' status ' + response.status);
+            console.log('Unauthenticated ' + method + ' /api/sync safely rejected (' + response.status + ')');
+          }
           NODE
