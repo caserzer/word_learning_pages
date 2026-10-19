@@ -137,7 +137,9 @@ function sourceDetails(item){
  const details=document.createElement('details'),summary=document.createElement('summary');
  summary.textContent='资料来源';details.append(summary);
  const pronunciation=pronunciationInfo(item);if(pronunciation.note){const note=document.createElement('p');note.textContent=pronunciation.note;details.append(note);}
- const p=document.createElement('p');p.textContent=item.pages?.length?'词表 PDF 第 '+item.pages.join('、')+' 页':'自行录入或免费词典补充';details.append(p);
+ const p=document.createElement('p');p.textContent=item.sourceTitle?item.sourceTitle+' · '+(item.sourceSection||''):item.pages?.length?'词表 PDF 第 '+item.pages.join('、')+' 页':'自行录入或免费词典补充';details.append(p);
+ for(const text of Array.isArray(item.sourceNotes)?item.sourceNotes:[]){const note=document.createElement('p');note.textContent=text;details.append(note);}
+ if(item.forms){const forms=document.createElement('p');forms.textContent='词形：'+item.forms;details.append(forms);}
  if(safeLink(item.audio?.descriptionUrl)){const a=document.createElement('a');a.href=item.audio.descriptionUrl;a.target='_blank';a.rel='noopener';a.textContent=(item.audio.artist||'录音作者')+' · '+item.audio.license;details.append(a);}
  if(safeLink(item.translationSource)){const a=document.createElement('a');a.href=item.translationSource;a.textContent='释义来源：'+(item.translationProvider||'MyMemory');details.append(a);}
  for(const definition of Array.isArray(item.definitions)?item.definitions:[]){if(!safeLink(definition.source))continue;const a=document.createElement('a');a.href=definition.source;a.target='_blank';a.rel='noopener';a.textContent='词义来源 '+(definition.license?.name||'');details.append(a);}
