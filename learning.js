@@ -265,6 +265,12 @@ export function saveWaiting(state,flow,now=new Date()){
  else existing.lists=item.lists;
  flow.draft=null;flow.lookupDraft=null;flow.typedQuery='';flow.phase='input';flow.undo=null;return true;
 }
+// Today is Shanghai's calendar day, independent of the date a resumable task began.
+export function todayReviewItems(items,now=new Date()){
+ const today=day(now),onDay=at=>at&&Number.isFinite(Date.parse(at))&&day(new Date(at))===today;
+ return items.filter(item=>!['waiting','initial'].includes(item.learningStatus)&&
+  (item.studyDay===today||onDay(item.lastReview)||(item.history||[]).some(event=>onDay(event.at))));
+}
 export function dailyStats(state,now=new Date()){
  const today=day(now),onDay=at=>at&&Number.isFinite(Date.parse(at))&&day(new Date(at))===today;
  return {added:state.items.filter(x=>onDay(x.createdAt)||!x.createdAt&&x.studyDay===today).length,reviewed:state.items.filter(x=>(x.history||[]).some(h=>onDay(h.at))).length,attempts:state.items.reduce((n,x)=>n+(x.history||[]).filter(h=>onDay(h.at)).length,0),groups:(state.completedGroups||[]).filter(x=>x.day===today).length};

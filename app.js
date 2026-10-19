@@ -1,4 +1,4 @@
-import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,pronunciationInfo,reviewProgress,senseOptions,commitDraft,recordReview,undoReview,wordKey,wordGroups,searchBook,dueItems,prepareSense,previewImport,applyImport,getSessions,activateSession,parkLearning,resumeLearning,saveWaiting,dailyStats,createSync,mergeCloud,restoreTask} from './learning.js?v=cbf5833cbf1dfe21';
+import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,pronunciationInfo,reviewProgress,senseOptions,commitDraft,recordReview,undoReview,wordKey,wordGroups,searchBook,dueItems,prepareSense,previewImport,applyImport,getSessions,activateSession,parkLearning,resumeLearning,saveWaiting,dailyStats,todayReviewItems,createSync,mergeCloud,restoreTask} from './learning.js?v=921919e82c5dee01';
 const $=id=>document.getElementById(id),base=(window.WORD_LEARNING_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
 let sync=null;
 let storage;try{storage=window.localStorage;if(storage.getItem('word-learning-before-cloud-v1')===null)storage.setItem('word-learning-before-cloud-v1',storage.getItem('word-learning-v1')||JSON.stringify({version:1,items:[]}));}catch{}
@@ -52,7 +52,7 @@ function render(){
  $('announcement').textContent='';document.body?.setAttribute('data-view',view);refreshRail();
  if(view==='home'){renderHome();return;}
  if(view==='book'){showPanel('book');renderBook();return;}
- if(view==='due'){showPanel('due-home');const n=dueItems(state.items).length;$('due-count').textContent=n?`个人词本 ${wordGroups(state.items).length} 个词，共 ${state.items.length} 个义项；${n} 个义项到期。`:'现在没有到期的词。';const continuing=sessions.due.phase==='review'||sessions.due.suspended==='review';$('due').textContent=continuing?'继续这轮复习':sessions.due.phase==='finished'?'继续下一轮':'开始到期复习';$('due-result').textContent=sessions.due.phase==='finished'?`本轮完成，仍有 ${n} 个义项待复习。可以继续，也可以添加新词。`:'';$('due').disabled=!n&&!continuing;$('today').disabled=continuing;return;}
+ if(view==='due'){showPanel('due-home');const n=dueItems(state.items).length;$('due-count').textContent=n?`个人词本 ${wordGroups(state.items).length} 个词，共 ${state.items.length} 个义项；${n} 个义项到期。`:'现在没有到期的词。';const continuing=sessions.due.phase==='review'||sessions.due.suspended==='review';$('due').textContent=continuing?'继续这轮复习':sessions.due.phase==='finished'?'继续下一轮':'开始到期复习';$('due-result').textContent=sessions.due.phase==='finished'?`本轮完成，仍有 ${n} 个义项待复习。可以继续，也可以添加新词。`:'';$('due').disabled=!n&&!continuing;renderTodayReview(continuing);return;}
  if(flow.phase==='home'&&flow.suspended){showPause('上次停在这里','草稿和回顾位置都保留着。','继续上次',resume,'返回今日',()=>switchView('home'));return;}
  if(flow.phase==='finished'){showPause('本轮完成',`这一轮的记录已保存，可以继续学新词。`,'继续学新词',addNew,'返回今日',()=>switchView('home'));return;}
  if(flow.phase==='group'){showPause('这一组准备好了','这是上一版保留的未完成小组。','回顾这三个词',()=>review(flow.pending,'group'),'回顾后结束',finish);return;}
@@ -66,6 +66,17 @@ function render(){
   $('draft-sense').replaceChildren(...options.map(text=>{const o=document.createElement('option');o.value=text;o.textContent=text;return o;}));$('draft-sense').value=activeItem.meaning;$('draft-sense').hidden=options.length<2;$('draft-sense-label').hidden=options.length<2;
   $('learned').textContent=flow.pending.length===2&&!flow.studied.includes(activeItem.id)?'保存并回顾这 3 个词':'保存并学习';$('draft-source').replaceChildren(sourceDetails(activeItem));$('sense-notice').textContent=state.items.some(x=>wordKey(x.word)===wordKey(activeItem.word))?'已有词：保留已有意思会复用记录；不同意思将保存为独立义项，不覆盖原进度。':'';
  }
+}
+function renderTodayReview(continuing){
+ const eligible=todayReviewItems(state.items),today=day();
+ const addedToday=state.items.filter(item=>item.createdAt&&Number.isFinite(Date.parse(item.createdAt))?day(new Date(item.createdAt))===today:item.studyDay===today);
+ const waiting=addedToday.filter(item=>item.learningStatus==='waiting').length,initial=addedToday.filter(item=>item.learningStatus==='initial').length;
+ $('today').disabled=false;
+ $('today').textContent=continuing?(sessions.due.reviewKind==='today'?'继续今日回顾':'继续未完成复习'):`回顾今天已学 · ${eligible.length} 个`;
+ $('today-review-status').textContent=`今天已学或自评、可回顾 ${eligible.length} 个义项；今日新增待学 ${waiting} 个，待初次回顾 ${initial} 个。`+(continuing?'会先继续未完成的这一轮，保留当前题目和答案。':'待学词需先学习，再进入回顾；继续学习会先恢复已有草稿或小组。');
+ const f=sessions.learning;
+ $('today-learn').hidden=!(f.waiting.length||f.pending.length||f.recapQueue.length||f.draft||f.lookupDraft||f.draftQueue.length||f.intake.length);
+ $('today-learn').textContent='继续学习 / 初次回顾';
 }
 function showPause(title,text,primary,fn,secondary,other){showPanel('pause');$('pause-title').textContent=title;$('pause-text').textContent=text;$('pause-primary').textContent=primary;$('pause-primary').onclick=fn;$('pause-secondary').textContent=secondary;$('pause-secondary').onclick=other;}
 function renderReview(){
@@ -82,8 +93,8 @@ function review(ids,kind){
  ids=ids.filter(id=>itemById(id));stopAudio();searchVersion++;
  if(['due','today'].includes(kind)){
   flow=activateSession(state,'due');
-  if(flow.phase==='review'||flow.suspended==='review'){flow.phase='review';delete flow.suspended;view='today';save();render();return;}
-  if(!ids.length){view='due';save();render();$('status').textContent='没有需要回顾的词，可以随时添加新词。';return;}
+  if(flow.phase==='review'||flow.suspended==='review'){flow.phase='review';delete flow.suspended;view='today';save();render();$('prompt').focus();return;}
+  if(!ids.length){view='due';save();render();$('today-review-status').textContent+=kind==='today'?($('today-learn').hidden?' 今天还没有可回顾的词，可以点“添加新词”开始。':' 请点“继续学习 / 初次回顾”；已有草稿或小组会先继续，进度不会丢失。'):' 现在没有到期的词，可以继续学习新词。';return;}
  }else flow=activateSession(state,'learning');
  beginReview(flow,ids,kind);flow.recall=null;flow.undo=null;view='today';save();render();if(flow.phase==='review')$('prompt').focus();
 }
@@ -111,7 +122,7 @@ document.querySelectorAll('[data-rating]').forEach(b=>b.onclick=()=>score(b.data
 $('undo').onclick=()=>{stopAudio();const remote=itemFromStorage(flow.undo?.id);if(flow.undo&&remote&&(remote.reviewRevision||remote.reviewUpdatedAt||remote.lastReview)!==flow.undo.expectedRevision){flow.undo=null;mergeLatest();$('status').textContent='这个词已在另一处更新，不能覆盖较新的记录。';save();render();return;}mergeLatest();const groupId=flow.undo?.completedGroupId;if(!undoReview(state,flow)){$('status').textContent='这个词已在另一处更新，不能覆盖较新的记录。';save();render();return;}if(groupId){state.completedGroups=state.completedGroups.filter(x=>x.id!==groupId);state.removedGroupIds=[...new Set([...(state.removedGroupIds||[]),groupId])];}view='today';save();render();$('status').textContent='已撤销上一笔，请重新核对。';$('prompt').focus();};
 $('close').onclick=()=>switchView('home');
 $('nav-today').onclick=()=>switchView('home');$('nav-due').onclick=()=>switchView('due');
-$('due').onclick=()=>review(dueItems(state.items).slice(0,Number($('batch-size').value)||10).map(x=>x.id),'due');$('today').onclick=()=>review(state.items.filter(x=>x.studyDay===day()&&!['waiting','initial'].includes(x.learningStatus)).map(x=>x.id),'today');
+$('due').onclick=()=>review(dueItems(state.items).slice(0,Number($('batch-size').value)||10).map(x=>x.id),'due');$('today').onclick=()=>review(todayReviewItems(state.items).map(x=>x.id),'today');
 $('export').onclick=()=>{const u=URL.createObjectURL(new Blob([JSON.stringify(state,null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=u;a.download='word-learning-backup.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);};
 function openBook(id){stopAudio();searchVersion++;if(view!=='book')bookReturnView=view;view='book';bookEditId=null;$('word-detail').hidden=true;$('book-list').hidden=false;$('book-browse').hidden=false;save();render();if(id)openDetail(id);if(id)$('book-meaning').focus();else $('book-query').focus();}
 function action(text,fn){const b=document.createElement('button');b.className='quiet';b.textContent=text;b.onclick=fn;return b;}
@@ -226,7 +237,7 @@ function continueLearning(){
  }
  if(flow.phase==='review')$('prompt').focus();else if(flow.draft)$('draft-word').focus();else $('query').focus();
 }
-$('add-new').onclick=$('home-add').onclick=addNew;$('home-continue').onclick=continueLearning;
+$('add-new').onclick=$('home-add').onclick=addNew;$('home-continue').onclick=$('today-learn').onclick=continueLearning;
 $('home-due').onclick=()=>switchView('due');$('return-home').onclick=()=>switchView('home');
 $('saved-drafts').onclick=()=>{parkLearning(flow);const draft=flow.draftQueue.shift();if(draft)Object.assign(flow,draft,{phase:draft.draft?'study':'input'});$('query').value=flow.typedQuery||'';save();render();restoreLookup();};
 $('save-waiting').onclick=()=>{if(!flow.draft)return;flow.draft.meaning=$('draft-meaning').value.trim();if(!saveWaiting(state,flow))return;if(flow.fromIntake)flow.intake.shift();flow.fromIntake=false;save();render();$('status').textContent='已保存到待学，没有计为已学习。';const back=state.addReturn;delete state.addReturn;if(back?.session==='due'&&back.view==='today'){flow=activateSession(state,'due');view='today';save();render();$('prompt').focus();}else if(flow.intake.length)void nextIntake();};
