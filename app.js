@@ -1,6 +1,7 @@
-import {reviewEvidence,REVIEW_SKILLS,createReviewUI,day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,pronunciationInfo,reviewProgress,senseOptions,commitDraft,recordReview,undoReview,wordKey,wordGroups,searchBook,dueItems,prepareSense,previewImport,applyImport,getSessions,activateSession,parkLearning,resumeLearning,saveWaiting,dailyStats,todayReviewItems,createSync,mergeCloud,restoreTask} from './learning.js?v=8ec77165d45ae416';
+import {reviewEvidence,REVIEW_SKILLS,createReviewUI,day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,pronunciationInfo,reviewProgress,senseOptions,commitDraft,recordReview,undoReview,wordKey,wordGroups,searchBook,dueItems,prepareSense,previewImport,applyImport,getSessions,activateSession,parkLearning,resumeLearning,saveWaiting,dailyStats,todayReviewItems,createSync,mergeCloud,restoreTask,captureTask,newId,stable,cloudDocument} from './learning.js?v=e1b7d676191daf66';
 const $=id=>document.getElementById(id),base=(window.WORD_LEARNING_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
-let sync=null;
+let sync=null,pendingSyncPaint=false,pendingSyncLookup=false,syncPointerDown=false;
+const editingControl=()=>/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName||'');
 let storage;try{storage=window.localStorage;if(storage.getItem('word-learning-before-cloud-v1')===null)storage.setItem('word-learning-before-cloud-v1',storage.getItem('word-learning-v1')||JSON.stringify({version:1,items:[]}));}catch{}
 const state=loadState(storage),sessions=getSessions(state);let flow=state.flow;
 const bookState=state.bookState||{query:'',status:'',list:'',since:'',sort:'recent',page:0};state.bookState=bookState;let importPreview=null;
@@ -50,6 +51,7 @@ function refreshRail(){
  $('close').hidden=view!=='today'||['home','finished'].includes(flow.phase);$('undo-bar').hidden=!flow.undo;
 }
 function render(){
+ pendingSyncPaint=false;$('sync-refresh-status').hidden=true;
  if(view==='today'&&state.activeSession!=='due'){let exposed=false;for(const id of [...flow.pending,...flow.reviewed])exposed=markReviewExposure('learning-list',id,itemById(id)?.word)||exposed;if(exposed)save();}
  $('announcement').textContent='';document.body?.setAttribute('data-view',view);document.body?.setAttribute('data-review-v2',String(view==='today'&&flow.phase==='review'&&flow.reviewVersion===2));refreshRail();
  if(view==='home'){renderHome();return;}
@@ -259,17 +261,28 @@ function stashDraft(nextQuery){
 
 
 // Sync never blocks learning. The original local JSON is kept outside the live state.
-function applyCloudState(next,paint=true){
+function applyCloudState(next,paint=true,background=false){
  getSessions(next);
- const changed=JSON.stringify(state.sessions)!==JSON.stringify(next.sessions)||state.activeSession!==next.activeSession;
- const itemsChanged=JSON.stringify(state.items)!==JSON.stringify(next.items);
+ // A remote successor must not retarget the answer currently being typed.
+ // Keep that whole local workspace as a concurrent branch, never splice queues.
+ if(background&&editingControl()&&view==='today'&&(state.activeSession!==next.activeSession||state.workspaceView!==next.workspaceView||stable(state.sessions)!==stable(next.sessions))){
+  const held=JSON.parse(JSON.stringify(state));held.cloud={format:1,tasks:[],selected:null};captureTask(held,newId());
+  const branch=held.cloud.tasks[0];if(branch){next.cloud.tasks.push(branch);next.cloud.selected=branch.id;next.sessions=held.sessions;next.activeSession=held.activeSession;next.workspaceView=held.workspaceView;if(held.addReturn)next.addReturn=held.addReturn;else delete next.addReturn;getSessions(next);}
+ }
+ const changed=stable(state.sessions)!==stable(next.sessions)||state.activeSession!==next.activeSession;
+ const itemsChanged=stable(state.items)!==stable(next.items);
  const currentBook=state.bookState,currentFilters=state.reviewFilters;Object.assign(state,next);state.bookState=currentBook;state.reviewFilters=currentFilters;
  if(next.sessions){Object.assign(sessions,next.sessions);state.sessions=sessions;flow=sessions[state.activeSession==='due'?'due':'learning'];state.flow=flow;}
  if(changed&&!bookEditId){stopAudio();searchVersion++;view=state.workspaceView||'home';}
- if(paint&&!bookEditId&&(changed||itemsChanged)){render();if(changed)restoreLookup();}
+ if(paint&&!bookEditId&&(changed||itemsChanged)){
+  if(background&&editingControl()){pendingSyncPaint=true;pendingSyncLookup||=changed;$('sync-refresh-status').hidden=false;}
+  else {render();if(changed)restoreLookup();}
+ }
  if(paint)renderSyncBranches();
 }
+let branchSignature='';
 function renderSyncBranches(){
+ const signature=stable({tasks:state.cloud?.tasks,selected:state.cloud?.selected});if(signature===branchSignature)return;branchSignature=signature;
  const target=$('sync-branches');target.replaceChildren();
  for(const task of state.cloud?.tasks||[]){if(task.id===state.cloud.selected)continue;
   const row=document.createElement('p'),button=document.createElement('button');button.className='quiet';
@@ -277,12 +290,25 @@ function renderSyncBranches(){
   row.append(button);target.append(row);
  }
 }
-sync=createSync({storage,base,getState:()=>state,applyState:applyCloudState,fetcher:fetch,setTimer:setTimeout,clearTimer:clearTimeout,onStatus:(text,kind)=>{const extra=Math.max(0,(state.cloud?.tasks?.length||0)-1);$('sync-status').textContent=text+(extra?' · 另有 '+extra+' 份进度，可展开云同步继续':'');$('sync-status').dataset.kind=kind;}});
+sync=createSync({storage,base,getState:()=>state,applyState:next=>applyCloudState(next,true,true),fetcher:fetch,setTimer:setTimeout,clearTimer:clearTimeout,onStatus:(text,kind)=>{const extra=Math.max(0,(state.cloud?.tasks?.length||0)-1);$('sync-status').textContent=text+(extra?' · 另有 '+extra+' 份进度，可展开云同步继续':'');$('sync-status').dataset.kind=kind;}});
 $('sync-connect').onsubmit=e=>{e.preventDefault();try{sync.unlock($('sync-key').value.trim(),$('sync-remember').checked);$('sync-key').value='';}catch(error){$('sync-status').textContent=error.message;$('sync-key').focus();}};
 $('sync-now').onclick=()=>void sync.run();
-window.addEventListener?.('online',()=>void sync.run());
-window.addEventListener?.('focus',()=>void sync.run());
-window.addEventListener?.('storage',e=>{if(e.key==='word-learning-v1'){sync.capture();mergeLatest();render();renderSyncBranches();void sync.run();}});
+window.addEventListener?.('online',()=>void sync.run({automatic:true}));
+window.addEventListener?.('focus',()=>void sync.run({automatic:true}));
+window.addEventListener?.('storage',e=>{if(e.key==='word-learning-v1'){
+ sync.capture();const next=mergeCloud(state,loadState(storage));
+ // Other tabs retain their own filters and selected workspace. UI-only storage
+ // writes must not start another GET/write/storage-event feedback loop.
+ if(stable(cloudDocument(next))===stable(cloudDocument(mergeCloud(state,state))))return;
+ applyCloudState(next,true,true);void sync.run({automatic:true});
+}});
+function flushSyncPaint(){
+ // Do not remove a pointer target before its click, or a keyboard action's focus.
+ if(pendingSyncPaint&&!syncPointerDown&&!editingControl()&&!document.activeElement?.matches?.('button,a,summary')){const lookup=pendingSyncLookup;pendingSyncLookup=false;render();if(lookup)restoreLookup();}
+}
+document.addEventListener?.('pointerdown',()=>{syncPointerDown=true;});
+for(const event of ['pointerup','pointercancel'])document.addEventListener?.(event,()=>{syncPointerDown=false;setTimeout(flushSyncPaint,0);});
+document.addEventListener?.('focusout',()=>setTimeout(flushSyncPaint,0));
 renderSyncBranches();sync.start();
 
 $('backup-original').onclick=()=>{const raw=storage?.getItem('word-learning-before-cloud-v1');if(!raw){$('import-status').textContent='未找到升级前备份，请下载当前完整备份。';return;}const u=URL.createObjectURL(new Blob([raw],{type:'application/json'})),a=document.createElement('a');a.href=u;a.download='word-learning-before-cloud.json';a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);};

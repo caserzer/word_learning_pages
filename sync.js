@@ -133,11 +133,11 @@ export function mergeCloud(local,remote) {
 }
 export function cloudDocument(state) {
  // Browser settings and access key never leave their dedicated local keys.
- const result={version:1,items:state.items,importReceipts:state.importReceipts||[],completedGroups:state.completedGroups||[],removedGroupIds:state.removedGroupIds||[],cloud:{format:1,tasks:state.cloud.tasks,selected:null}};
+ const result={version:1,items:state.items,importReceipts:state.importReceipts||[],completedGroups:state.completedGroups||[],removedGroupIds:state.removedGroupIds||[],cloud:{format:1,tasks:state.cloud?.tasks||[],selected:null}};
  return clone(result);
 }
-export function createSync({storage,base,getState,applyState,onStatus=()=>{},fetcher=globalThis.fetch,setTimer=setTimeout,clearTimer=clearTimeout,actor=newId(),now=Date.now}) {
- let busy=false,timer=null,retry=1000,stopped=false,ready=false,key='',device='',original='',migration=false,cooldownUntil=0;
+export function createSync({storage,base,getState,applyState,onStatus=()=>{},fetcher=globalThis.fetch,setTimer=setTimeout,clearTimer=clearTimeout,actor=newId(),now=Date.now,requestTimeout=20000}) {
+ let busy=false,timer=null,retry=1000,stopped=false,ready=false,key='',device='',original='',migration=false,cooldownUntil=0,retryUntil=0,nextPollAt=0,acknowledged=null;
  const status=(text,kind='pending')=>onStatus(text,kind);
  if(!/^https:\/\//.test(base)&&!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(base)){onStatus('同步地址必须使用 HTTPS。','error');return {ready:false,capture(){},saved(){},run:async()=>{},start(){},unlock(){throw Error('同步地址不安全');}};}
  const read=()=>{const raw=storage.getItem(STATE_KEY);return raw?JSON.parse(raw):{version:1,items:[]};};
@@ -148,45 +148,55 @@ export function createSync({storage,base,getState,applyState,onStatus=()=>{},fet
   key=storage.getItem(KEY_KEY)||'';migration=storage.getItem('word-learning-migrated-v1')==='yes';ready=true;
   getState().items.forEach(normalizeHistory);captureTask(getState(),actor);
  } catch {status('无法保留升级前备份，云同步未启动。请先导出备份。','error');}
- function persist(state) {storage.setItem(STATE_KEY,JSON.stringify(state));applyState(state);}
+ function persist(state) {
+  if(stable(state)!==stable(getState()))applyState(state);
+  const current=getState();if(stable(read())!==stable(current))storage.setItem(STATE_KEY,JSON.stringify(current));
+ }
  function capture() {if(!ready)return;captureTask(getState(),actor);}
- function schedule(delay=500) {if(!ready||stopped||!key)return;clearTimer(timer);timer=setTimer(()=>void run(),Math.max(delay,cooldownUntil-now()));}
- function saved() {if(!ready)return;capture();schedule();if(!key)status('记录已保存在本机；填写同步口令后自动合并旧记录。','locked');}
+ function schedule(delay=500) {if(!ready||stopped||!key)return;clearTimer(timer);timer=setTimer(()=>void run({automatic:true}),Math.max(delay,cooldownUntil-now(),retryUntil-now()));}
+ function saved() {if(!ready)return;capture();if(acknowledged!==stable(cloudDocument(getState())))schedule();if(!key)status('记录已保存在本机；填写同步口令后自动合并旧记录。','locked');}
  async function request(method,body) {
-  const issuedKey=key;const response=await fetcher(base+'/api/sync',{method,headers:{Authorization:'Bearer '+key,'Content-Type':'application/json','X-Sync-Version':'1','X-Device-Id':device},...(body?{body:JSON.stringify(body)}:{}),cache:'no-store',redirect:'error',signal:AbortSignal.timeout(20000)});
-  let data;try{data=await response.json();}catch{throw Error('服务器响应异常');}
+  const issuedKey=key,controller=new AbortController();let timeout;
+  const expired=new Promise((_,reject)=>{timeout=globalThis.setTimeout(()=>{controller.abort();const error=Error('同步超时');error.name='TimeoutError';reject(error);},requestTimeout);});
+  try {
+  const response=await Promise.race([fetcher(base+'/api/sync',{method,headers:{Authorization:'Bearer '+key,'Content-Type':'application/json','X-Sync-Version':'1','X-Device-Id':device},...(body?{body:JSON.stringify(body)}:{}),cache:'no-store',redirect:'error',signal:controller.signal}),expired]);
   if(issuedKey!==key)throw Error('同步口令已更新，正在重新连接…');
   if([401,403].includes(response.status)){stopped=true;throw Error('同步口令无效或已更换；本机记录仍保留，请重新填写口令。');}
   if(response.status===429){const seconds=Number(response.headers.get('Retry-After'));const wait=Number.isFinite(seconds)&&seconds>0?Math.min(seconds,900):900;cooldownUntil=now()+wait*1000;throw Error('口令尝试次数过多，约'+Math.ceil(wait/60)+'分钟后自动重试；所有设备暂缓同步，本机记录仍保留，可继续学习。');}
-  if(response.status===503){throw Error(data.error==='sync_not_configured'?'云端同步尚未配置；本机记录仍保留。':'云端暂时不可用；本机记录仍保留，将自动重试。');}
   if(response.status===426){stopped=true;throw Error('请刷新页面以继续同步；本机和云端记录均保留。');}
+  let data;try{data=await Promise.race([response.json(),expired]);}catch(error){if(error.name==='TimeoutError'||error.name==='AbortError')throw error;throw Error('服务器响应异常');}
+  if(issuedKey!==key)throw Error('同步口令已更新，正在重新连接…');
+  if(response.status===503){throw Error(data.error==='sync_not_configured'?'云端同步尚未配置；本机记录仍保留。':'云端暂时不可用；本机记录仍保留，将自动重试。');}
   if(!response.ok&&response.status!==409)throw Error(response.status===413?'记录超出当前同步容量；本机和云端原记录均保留，请导出备份。':'同步暂时失败，本机记录仍保留。');
   if(data.protocol!==1||!Number.isSafeInteger(data.revision)||data.revision<0||data.state?.version!==1||data.state.cloud?.format!==1||!Array.isArray(data.state.items)||!Array.isArray(data.state.cloud.tasks))throw Error('云端格式尚不兼容，本机记录仍保留。');
   return {data,conflict:response.status===409};
+  }finally{globalThis.clearTimeout(timeout);}
  }
- async function run() {
-  if(!ready||!key||busy||stopped)return;if(now()<cooldownUntil){schedule();return;}busy=true;clearTimer(timer);status('正在同步，学习可继续…');
+ async function run({automatic=false}={}) {
+  if(!ready||!key||busy||stopped)return;
+  if(automatic&&acknowledged===stable(cloudDocument(getState()))&&now()<nextPollAt){schedule(nextPollAt-now());return;}
+  if(now()<cooldownUntil||(automatic&&now()<retryUntil)){schedule();return;}busy=true;clearTimer(timer);status('正在同步，学习可继续…');
   try {
    capture();const latest=read();const local=mergeCloud(getState(),latest);persist(local);
-   let {data}=await request('GET');migration=Boolean(data.migrated);
+   let {data}=await request('GET');migration=Boolean(data.migrated);let settled=false;
    // CAS retries always re-merge the latest local edits; responses never replace them.
    for(let attempt=0;attempt<4;attempt++){
     capture();const merged=applyImports(mergeCloud(getState(),data.state),data.imports);persist(merged);capture();
-    const outgoing=cloudDocument(merged);
-    if(data.migrated&&stable(outgoing)===stable(data.state)){migration=true;break;}
+    const outgoing=cloudDocument(getState());
+    if(data.migrated&&stable(outgoing)===stable(data.state)){migration=true;settled=true;break;}
     const body={protocol:1,baseRevision:data.revision,operationId:newId(),state:outgoing,...(!migration?{migration:{deviceId:device,original}}:{})};
     const result=await request('PUT',body);data=result.data;
     if(result.conflict)continue;
-    migration=true;capture();persist(mergeCloud(getState(),data.state));break;
+    migration=true;settled=true;capture();persist(mergeCloud(getState(),data.state));break;
    }
-   if(!migration)throw Error('另一台设备正在更新，稍后会继续合并。');
-   storage.setItem('word-learning-migrated-v1','yes');retry=1000;
+   if(!settled)throw Error('另一台设备正在更新，稍后会继续合并。');
+   if(storage.getItem('word-learning-migrated-v1')!=='yes')storage.setItem('word-learning-migrated-v1','yes');retry=1000;cooldownUntil=0;retryUntil=0;acknowledged=stable(data.state);
    // Edits while a request was in flight need a subsequent upload.
-   if(stable(cloudDocument(getState()))!==stable(data.state)){status('新记录待同步…');schedule(300);}else{status('已同步 · 所有设备共用一份记录','ok');schedule(30000);}
-  } catch(error) {status(error.message||'离线中，记录已保存在本机，联网后自动重试。','error');schedule(retry);retry=Math.min(retry*2,60000);}
+   if(stable(cloudDocument(getState()))!==stable(data.state)){status('新记录待同步…');schedule(300);}else{status('已同步 · 所有设备共用一份记录','ok');nextPollAt=now()+30000;schedule(30000);}
+  } catch(error) {nextPollAt=0;retryUntil=now()+retry;status(error.name==='TimeoutError'||error.name==='AbortError'?'同步超时，记录已保存在本机，稍后自动重试。':error.message||'离线中，记录已保存在本机，联网后自动重试。','error');schedule(retry);retry=Math.min(retry*2,60000);}
   finally{busy=false;}
  }
  return {capture,saved,run,start(){if(key)schedule(0);else status('记录已保存在本机；填写同步口令后自动合并旧记录。','locked');},
-  unlock(value,remember=true){if(!ready)throw Error('本机备份尚未成功，请先导出备份。');if(!/^[A-Za-z0-9_-]{6,128}$/.test(value))throw Error('请填写6–128位的专用同步口令（字母、数字、- 或 _）。');key=value;if(remember)storage.setItem(KEY_KEY,key);else storage.removeItem?.(KEY_KEY);stopped=false;schedule(0);},
+  unlock(value,remember=true){if(!ready)throw Error('本机备份尚未成功，请先导出备份。');if(!/^[A-Za-z0-9_-]{6,128}$/.test(value))throw Error('请填写6–128位的专用同步口令（字母、数字、- 或 _）。');key=value;acknowledged=null;nextPollAt=0;retryUntil=0;retry=1000;if(remember)storage.setItem(KEY_KEY,key);else storage.removeItem?.(KEY_KEY);stopped=false;schedule(0);},
   stop(){stopped=true;clearTimer(timer);},get ready(){return ready;},get actor(){return actor;}};
 }

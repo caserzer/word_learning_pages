@@ -1,5 +1,5 @@
 // Review v2: immutable evidence lives in the existing mergeable history log.
-import {newId,normalizeHistory} from './sync.js?v=4fd3277138bdb577';
+import {newId,normalizeHistory} from './sync.js?v=075bed87a5f4e3e7';
 import {getUseQuestion} from './review-content.js?v=6ce6a947486b19f4';
 export const MODES={integrated:'综合复习',meaning:'看英文想词义',listening:'听音想词义',spelling:'看词义拼写',dictation:'听音默写',use:'词组填空'};
 export const SKILLS={meaning:'词义',listening:'听辨',spelling:'拼写',use:'用法'};
