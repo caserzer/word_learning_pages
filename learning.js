@@ -1,3 +1,5 @@
+export {evidence as reviewEvidence,SKILLS as REVIEW_SKILLS} from './review.js?v=44bda9e06eba1efb';
+export {createReviewUI} from './review-ui.js?v=6b6dc19e78f0ac85';
 export {createSync,mergeCloud,captureTask,restoreTask,normalizeHistory,newId} from './sync.js?v=4fd3277138bdb577';
 import {normalizeHistory,newId} from './sync.js?v=4fd3277138bdb577';
 export const day = (now=new Date()) => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
@@ -47,6 +49,7 @@ export function learnWord(flow,id) {
  flow.currentId=null;flow.phase=flow.pending.length>=3?'group':'input';
 }
 export function beginReview(flow,ids,kind) {
+ if(flow.reviewVersion===2)for(const key of ['reviewVersion','queue','sessionId','mode','scope','startedAt'])delete flow[key];
  flow.reviewIds=[...new Set(ids)];flow.reviewInitialCount=flow.reviewIds.length;flow.position=0;flow.retried=[];flow.reviewKind=kind;
  flow.phase=flow.reviewIds.length?'review':kind==='finish'?'finished':'home';
 }
@@ -174,7 +177,7 @@ export function undoReview(state,flow,now=new Date()) {
  const later=retained.filter(h=>h.schedule&&!keep.has(h.id)&&Date.parse(h.at)>(Date.parse(undo.schedule.lastReview)||0)).sort((a,b)=>a.at.localeCompare(b.at)).at(-1);
  if(later)Object.assign(undo.schedule,later.schedule);undo.schedule.history=retained;
  const revision=new Date(Math.max(+now,(Date.parse(item.reviewUpdatedAt)||0)+1)).toISOString();Object.assign(item,undo.schedule,{reviewUpdatedAt:revision,reviewRevision:revision+':'+Math.random().toString(36).slice(2)});
- for(const key of Object.keys(flow))delete flow[key];Object.assign(flow,undo.before,{undo:null});return true;
+ for(const key of Object.keys(flow))delete flow[key];Object.assign(flow,undo.before,{undo:null});if(flow.reviewVersion===2)getSessions(state);return true;
 }
 
 
@@ -269,10 +272,10 @@ export function saveWaiting(state,flow,now=new Date()){
 export function todayReviewItems(items,now=new Date()){
  const today=day(now),onDay=at=>at&&Number.isFinite(Date.parse(at))&&day(new Date(at))===today;
  return items.filter(item=>!['waiting','initial'].includes(item.learningStatus)&&
-  (item.studyDay===today||onDay(item.lastReview)||(item.history||[]).some(event=>onDay(event.at))));
+  (item.studyDay===today||onDay(item.lastReview)||(item.history||[]).some(event=>event.outcome!=='skip'&&onDay(event.at))));
 }
 export function dailyStats(state,now=new Date()){
  const today=day(now),onDay=at=>at&&Number.isFinite(Date.parse(at))&&day(new Date(at))===today;
- return {added:state.items.filter(x=>onDay(x.createdAt)||!x.createdAt&&x.studyDay===today).length,reviewed:state.items.filter(x=>(x.history||[]).some(h=>onDay(h.at))).length,attempts:state.items.reduce((n,x)=>n+(x.history||[]).filter(h=>onDay(h.at)).length,0),groups:(state.completedGroups||[]).filter(x=>x.day===today).length};
+ return {added:state.items.filter(x=>onDay(x.createdAt)||!x.createdAt&&x.studyDay===today).length,reviewed:state.items.filter(x=>(x.history||[]).some(h=>h.outcome!=='skip'&&onDay(h.at))).length,attempts:state.items.reduce((n,x)=>n+(x.history||[]).filter(h=>h.outcome!=='skip'&&onDay(h.at)).length,0),groups:(state.completedGroups||[]).filter(x=>x.day===today).length};
 }
 
