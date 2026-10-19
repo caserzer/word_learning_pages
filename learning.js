@@ -1,5 +1,5 @@
-export {createSync,mergeCloud,captureTask,restoreTask,normalizeHistory,newId} from './sync.js?v=c91260a067c3cc39';
-import {normalizeHistory,newId} from './sync.js?v=c91260a067c3cc39';
+export {createSync,mergeCloud,captureTask,restoreTask,normalizeHistory,newId} from './sync.js?v=4fd3277138bdb577';
+import {normalizeHistory,newId} from './sync.js?v=4fd3277138bdb577';
 export const day = (now=new Date()) => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 export function loadState(storage) {
  try {

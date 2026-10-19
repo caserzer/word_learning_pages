@@ -1,4 +1,4 @@
-import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,pronunciationInfo,reviewProgress,senseOptions,commitDraft,recordReview,undoReview,wordKey,wordGroups,searchBook,dueItems,prepareSense,previewImport,applyImport,getSessions,activateSession,parkLearning,resumeLearning,saveWaiting,dailyStats,createSync,mergeCloud,restoreTask} from './learning.js?v=e2001aa4c4385c1d';
+import {day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,pronunciationInfo,reviewProgress,senseOptions,commitDraft,recordReview,undoReview,wordKey,wordGroups,searchBook,dueItems,prepareSense,previewImport,applyImport,getSessions,activateSession,parkLearning,resumeLearning,saveWaiting,dailyStats,createSync,mergeCloud,restoreTask} from './learning.js?v=cbf5833cbf1dfe21';
 const $=id=>document.getElementById(id),base=(window.WORD_LEARNING_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
 let sync=null;
 let storage;try{storage=window.localStorage;if(storage.getItem('word-learning-before-cloud-v1')===null)storage.setItem('word-learning-before-cloud-v1',storage.getItem('word-learning-v1')||JSON.stringify({version:1,items:[]}));}catch{}
@@ -243,6 +243,7 @@ function stashDraft(nextQuery){
 
 // Sync never blocks learning. The original local JSON is kept outside the live state.
 function applyCloudState(next,paint=true){
+ getSessions(next);
  const changed=JSON.stringify(state.sessions)!==JSON.stringify(next.sessions)||state.activeSession!==next.activeSession;
  const itemsChanged=JSON.stringify(state.items)!==JSON.stringify(next.items);
  const currentBook=state.bookState;Object.assign(state,next);state.bookState=currentBook;

@@ -24,6 +24,9 @@ function newer(a,b,field,secondary='') {
  for(let i=0;i<ka.length;i++)if(ka[i]!==kb[i])return ka[i]>kb[i]?a:b;return a;
 }
 function mergeItem(a,b) {
+ const virgin=x=>x.importOrigin&&!x.lastReview&&!(x.history||[]).length&&!x.reviewUpdatedAt&&!x.meaningUpdatedAt;
+ if(virgin(a)&&!b.importOrigin)return clone(b);
+ if(virgin(b)&&!a.importOrigin)return clone(a);
  const schedule=newer(a,b,'reviewUpdatedAt','reviewRevision'),content=newer(a,b,'meaningUpdatedAt');
  const removedReviewIds=unique([...(a.removedReviewIds||[]),...(b.removedReviewIds||[])]),removed=new Set(removedReviewIds);
  const history=unionObjects(a.history,b.history).filter(h=>!removed.has(h.id)).sort((a,b)=>a.at.localeCompare(b.at)||a.id.localeCompare(b.id));
@@ -42,7 +45,7 @@ function mergeItem(a,b) {
 const refArrays=new Set(['studied','pending','reviewed','reviewIds','retried','waiting','ids']);
 function remap(value,aliases,key='') {
  if(typeof value==='string')return (key==='id'||key==='currentId'||refArrays.has(key))?(aliases.get(value)||value):value;
- if(Array.isArray(value))return value.map(x=>remap(x,aliases,key));
+ if(Array.isArray(value)){const result=value.map(x=>remap(x,aliases,key));return ['waiting','pending','studied'].includes(key)?[...new Set(result)]:result;}
  if(value&&typeof value==='object')return Object.fromEntries(Object.entries(value).map(([k,v])=>[k,remap(v,aliases,k)]));return value;
 }
 function dominates(a,b) { const keys=unique([...Object.keys(a),...Object.keys(b)]);return keys.every(k=>(a[k]||0)>=(b[k]||0))&&keys.some(k=>(a[k]||0)>(b[k]||0)); }
@@ -61,6 +64,51 @@ export function restoreTask(state,id) {
  const task=state.cloud.tasks.find(x=>x.id===id);if(!task)return false;
  Object.assign(state,clone(task.value));if(!task.value.addReturn)delete state.addReturn;state.flow=state.sessions[state.activeSession==='due'?'due':'learning'];state.cloud.selected=id;return true;
 }
+const senseKey = x => x.word.trim().toLowerCase().replace(/\s+/g,' ')+'\0'+x.meaning.trim();
+// Receipts travel with the private document. Replaying a command cannot recreate
+// an edited sense, reset learning, or count an existing sense as newly added.
+export function applyImports(state,commands=[]) {
+ state.importReceipts||=[];
+ for(const command of commands){
+  if(state.importReceipts.some(r=>r.id===command.id))continue;
+  if(typeof command.id!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(command.studyDay)||!Number.isFinite(Date.parse(command.requestedAt))||!Array.isArray(command.items)||command.items.length>1000)throw Error('无效的待学导入');
+  const bindings=[];
+  for(const source of command.items){
+   const importId='import:'+command.id+':'+source.id;
+   let item=state.items.find(x=>x.id===importId)||state.items.find(x=>senseKey(x)===senseKey(source));
+   if(!item){
+    const id=importId;
+    item={...clone(source),id,importOrigin:command.id,studyDay:command.studyDay,createdAt:command.requestedAt,lists:[command.studyDay],stage:0,due:null,history:[],learningStatus:'waiting'};
+    state.items.push(item);
+   }
+   bindings.push({sourceId:source.id,itemId:item.id,word:source.word,meaning:source.meaning});
+  }
+  state.importReceipts.push({id:command.id,bindings});
+ }
+ return state;
+}
+function reconcileImports(a,b) {
+ const receipts=new Map();
+ for(const r of [...(a.importReceipts||[]),...(b.importReceipts||[])]){
+  const old=receipts.get(r.id);receipts.set(r.id,{id:r.id,bindings:unionObjects(old?.bindings,r.bindings,x=>stable(x))});
+ }
+ const aliases=new Map();
+ for(const receipt of receipts.values())for(const binding of receipt.bindings){
+  const candidates=[a,b].flatMap(s=>s.items.filter(x=>senseKey(x)===senseKey(binding)||(x.id===binding.itemId&&(x.importOrigin===receipt.id||(s.importReceipts||[]).some(r=>r.id===receipt.id&&r.bindings.some(v=>v.sourceId===binding.sourceId&&v.itemId===x.id))))));
+  const ids=unique(candidates.map(x=>x.id));
+  // Prefer an already-existing personal ID over the dictionary/import ID.
+  ids.sort((x,y)=>Number(x===binding.sourceId||x.startsWith('import:'))-Number(y===binding.sourceId||y.startsWith('import:'))||x.localeCompare(y));
+  if(ids.length)for(const id of ids)aliases.set(id,ids[0]);
+ }
+ const resolve=id=>{const seen=new Set();while(aliases.has(id)&&aliases.get(id)!==id&&!seen.has(id)){seen.add(id);id=aliases.get(id);}return id;};
+ for(const [id] of aliases)aliases.set(id,resolve(id));
+ for(const s of [a,b]){
+  s.items=s.items.map(x=>({...x,id:aliases.get(x.id)||x.id}));
+  s.sessions=remap(s.sessions,aliases);s.flow=remap(s.flow,aliases);s.completedGroups=remap(s.completedGroups,aliases);
+  if(s.cloud)s.cloud.tasks=s.cloud.tasks.map(x=>({...x,value:remap(x.value,aliases)}));
+ }
+ return [...receipts.values()].map(r=>({...r,bindings:unionObjects([],r.bindings.map(x=>({...x,itemId:aliases.get(x.itemId)||x.itemId})),x=>stable(x))})).sort((a,b)=>a.id.localeCompare(b.id));
+}
 export function mergeCloud(local,remote) {
  const a=clone(local),b=clone(remote||{version:1,items:[]});a.items.forEach(normalizeHistory);b.items.forEach(normalizeHistory);
  // Old independent browsers may reuse dictionary IDs for different meanings.
@@ -73,18 +121,19 @@ export function mergeCloud(local,remote) {
    if(!discriminator&&item.cloudOriginId){try{discriminator=decodeURIComponent(item.id.slice((origin+'~sense~').length));}catch{discriminator=item.meaning;}}
    discriminator||=item.meaning;
    const id=item.cloudOriginId?item.id:origin+'~sense~'+encodeURIComponent(discriminator);aliases.set(item.id,id);item.cloudOriginId=origin;item.cloudMeaningKey=discriminator;item.id=id;
-  }if(aliases.size){s.sessions=remap(s.sessions,aliases);s.flow=remap(s.flow,aliases);s.completedGroups=remap(s.completedGroups,aliases);if(s.cloud)s.cloud.tasks=s.cloud.tasks.map(x=>({...x,value:remap(x.value,aliases)}));}}
+  }if(aliases.size){s.importReceipts=(s.importReceipts||[]).map(r=>({...r,bindings:r.bindings.map(x=>({...x,itemId:aliases.get(x.itemId)||x.itemId}))}));s.sessions=remap(s.sessions,aliases);s.flow=remap(s.flow,aliases);s.completedGroups=remap(s.completedGroups,aliases);if(s.cloud)s.cloud.tasks=s.cloud.tasks.map(x=>({...x,value:remap(x.value,aliases)}));}}
  }
- const map=new Map(b.items.map(x=>[x.id,x]));for(const item of a.items)map.set(item.id,map.has(item.id)?mergeItem(item,map.get(item.id)):item);
+ const importReceipts=reconcileImports(a,b);
+ const map=new Map();for(const item of [...b.items,...a.items])map.set(item.id,map.has(item.id)?mergeItem(item,map.get(item.id)):item);
  const tasks=unionObjects(a.cloud?.tasks,b.cloud?.tasks).filter((x,_,all)=>!all.some(y=>dominates(y.clock,x.clock)));
  const removedGroupIds=unique([...(a.removedGroupIds||[]),...(b.removedGroupIds||[])]);
- const result={...a,items:[...map.values()].sort((a,b)=>a.id.localeCompare(b.id)),completedGroups:unionObjects(a.completedGroups,b.completedGroups).filter(x=>!removedGroupIds.includes(x.id)),removedGroupIds,
+ const result={...a,importReceipts,items:[...map.values()].sort((a,b)=>a.id.localeCompare(b.id)),completedGroups:unionObjects(a.completedGroups,b.completedGroups).filter(x=>!removedGroupIds.includes(x.id)),removedGroupIds,
   cloud:{format:1,tasks,selected:tasks.some(x=>x.id===a.cloud?.selected)?a.cloud.selected:tasks.at(-1)?.id||null}};
  if(result.cloud.selected&&result.cloud.selected!==a.cloud?.selected)restoreTask(result,result.cloud.selected);return result;
 }
 export function cloudDocument(state) {
  // Browser settings and access key never leave their dedicated local keys.
- const result={version:1,items:state.items,completedGroups:state.completedGroups||[],removedGroupIds:state.removedGroupIds||[],cloud:{format:1,tasks:state.cloud.tasks,selected:null}};
+ const result={version:1,items:state.items,importReceipts:state.importReceipts||[],completedGroups:state.completedGroups||[],removedGroupIds:state.removedGroupIds||[],cloud:{format:1,tasks:state.cloud.tasks,selected:null}};
  return clone(result);
 }
 export function createSync({storage,base,getState,applyState,onStatus=()=>{},fetcher=globalThis.fetch,setTimer=setTimeout,clearTimer=clearTimeout,actor=newId(),now=Date.now}) {
@@ -110,6 +159,7 @@ export function createSync({storage,base,getState,applyState,onStatus=()=>{},fet
   if([401,403].includes(response.status)){stopped=true;throw Error('同步口令无效或已更换；本机记录仍保留，请重新填写口令。');}
   if(response.status===429){const seconds=Number(response.headers.get('Retry-After'));const wait=Number.isFinite(seconds)&&seconds>0?Math.min(seconds,900):900;cooldownUntil=now()+wait*1000;throw Error('口令尝试次数过多，约'+Math.ceil(wait/60)+'分钟后自动重试；所有设备暂缓同步，本机记录仍保留，可继续学习。');}
   if(response.status===503){throw Error(data.error==='sync_not_configured'?'云端同步尚未配置；本机记录仍保留。':'云端暂时不可用；本机记录仍保留，将自动重试。');}
+  if(response.status===426){stopped=true;throw Error('请刷新页面以继续同步；本机和云端记录均保留。');}
   if(!response.ok&&response.status!==409)throw Error(response.status===413?'记录超出当前同步容量；本机和云端原记录均保留，请导出备份。':'同步暂时失败，本机记录仍保留。');
   if(data.protocol!==1||!Number.isSafeInteger(data.revision)||data.revision<0||data.state?.version!==1||data.state.cloud?.format!==1||!Array.isArray(data.state.items)||!Array.isArray(data.state.cloud.tasks))throw Error('云端格式尚不兼容，本机记录仍保留。');
   return {data,conflict:response.status===409};
@@ -121,7 +171,7 @@ export function createSync({storage,base,getState,applyState,onStatus=()=>{},fet
    let {data}=await request('GET');migration=Boolean(data.migrated);
    // CAS retries always re-merge the latest local edits; responses never replace them.
    for(let attempt=0;attempt<4;attempt++){
-    capture();const merged=mergeCloud(getState(),data.state);persist(merged);
+    capture();const merged=applyImports(mergeCloud(getState(),data.state),data.imports);persist(merged);capture();
     const outgoing=cloudDocument(merged);
     if(data.migrated&&stable(outgoing)===stable(data.state)){migration=true;break;}
     const body={protocol:1,baseRevision:data.revision,operationId:newId(),state:outgoing,...(!migration?{migration:{deviceId:device,original}}:{})};
