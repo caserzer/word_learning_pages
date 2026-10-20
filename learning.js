@@ -1,7 +1,7 @@
-export {evidence as reviewEvidence,SKILLS as REVIEW_SKILLS} from './review.js?v=fbe7873f8423d801';
-export {createReviewUI} from './review-ui.js?v=89f91452a17be79d';
-export {createSync,mergeCloud,captureTask,restoreTask,normalizeHistory,newId,stable,cloudDocument} from './sync.js?v=075bed87a5f4e3e7';
-import {normalizeHistory,newId} from './sync.js?v=075bed87a5f4e3e7';
+export {evidence as reviewEvidence,SKILLS as REVIEW_SKILLS} from './review.js?v=370c24f7e6e3012c';
+export {createReviewUI} from './review-ui.js?v=79efeb054072bdd8';
+export {createSync,mergeCloud,captureTask,restoreTask,normalizeHistory,newId,stable,cloudDocument} from './sync.js?v=1f6a5d2bbbbed9b8';
+import {normalizeHistory,newId} from './sync.js?v=1f6a5d2bbbbed9b8';
 export const day = (now=new Date()) => new Intl.DateTimeFormat('en-CA',{timeZone:'Asia/Shanghai',year:'numeric',month:'2-digit',day:'2-digit'}).format(now);
 export function loadState(storage) {
  try {

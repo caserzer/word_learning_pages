@@ -136,10 +136,10 @@ export function cloudDocument(state) {
  const result={version:1,items:state.items,importReceipts:state.importReceipts||[],completedGroups:state.completedGroups||[],removedGroupIds:state.removedGroupIds||[],cloud:{format:1,tasks:state.cloud?.tasks||[],selected:null}};
  return clone(result);
 }
-export function createSync({storage,base,getState,applyState,onStatus=()=>{},fetcher=globalThis.fetch,setTimer=setTimeout,clearTimer=clearTimeout,actor=newId(),now=Date.now,requestTimeout=20000}) {
- let busy=false,timer=null,retry=1000,stopped=false,ready=false,key='',device='',original='',migration=false,cooldownUntil=0,retryUntil=0,nextPollAt=0,acknowledged=null;
+export function createSync({storage,base,getState,applyState,onStatus=()=>{},fetcher=globalThis.fetch,setTimer=setTimeout,clearTimer=clearTimeout,actor=newId(),now=Date.now,requestTimeout=20000,isVisible=()=>globalThis.document?.visibilityState!=='hidden',pollInterval=120000}) {
+ let busy=false,timer=null,retry=1000,stopped=false,ready=false,key='',device='',original='',migration=false,cooldownUntil=0,retryUntil=0,nextPollAt=0,acknowledged=null,dirty=false;
  const status=(text,kind='pending')=>onStatus(text,kind);
- if(!/^https:\/\//.test(base)&&!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(base)){onStatus('同步地址必须使用 HTTPS。','error');return {ready:false,capture(){},saved(){},run:async()=>{},start(){},unlock(){throw Error('同步地址不安全');}};}
+ if(!/^https:\/\//.test(base)&&!/^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(base)){onStatus('同步地址必须使用 HTTPS。','error');return {ready:false,capture(){},saved(){},visibilityChanged(){},run:async()=>{},start(){},unlock(){throw Error('同步地址不安全');}};}
  const read=()=>{const raw=storage.getItem(STATE_KEY);return raw?JSON.parse(raw):{version:1,items:[]};};
  try {
   const raw=storage.getItem(STATE_KEY);original=storage.getItem(BACKUP_KEY);
@@ -153,8 +153,8 @@ export function createSync({storage,base,getState,applyState,onStatus=()=>{},fet
   const current=getState();if(stable(read())!==stable(current))storage.setItem(STATE_KEY,JSON.stringify(current));
  }
  function capture() {if(!ready)return;captureTask(getState(),actor);}
- function schedule(delay=500) {if(!ready||stopped||!key)return;clearTimer(timer);timer=setTimer(()=>void run({automatic:true}),Math.max(delay,cooldownUntil-now(),retryUntil-now()));}
- function saved() {if(!ready)return;capture();if(acknowledged!==stable(cloudDocument(getState())))schedule();if(!key)status('记录已保存在本机；填写同步口令后自动合并旧记录。','locked');}
+ function schedule(delay=500) {if(!ready||stopped||!key)return;clearTimer(timer);if(!isVisible()&&!dirty)return;timer=setTimer(()=>void run({automatic:true}),Math.max(delay,cooldownUntil-now(),retryUntil-now()));}
+ function saved() {if(!ready)return;capture();dirty=acknowledged!==stable(cloudDocument(getState()));if(dirty)schedule();if(!key)status('记录已保存在本机；填写同步口令后自动合并旧记录。','locked');}
  async function request(method,body) {
   const issuedKey=key,controller=new AbortController();let timeout;
   const expired=new Promise((_,reject)=>{timeout=globalThis.setTimeout(()=>{controller.abort();const error=Error('同步超时');error.name='TimeoutError';reject(error);},requestTimeout);});
@@ -174,6 +174,7 @@ export function createSync({storage,base,getState,applyState,onStatus=()=>{},fet
  }
  async function run({automatic=false}={}) {
   if(!ready||!key||busy||stopped)return;
+  if(automatic&&!isVisible()&&!dirty){clearTimer(timer);return;}
   if(automatic&&acknowledged===stable(cloudDocument(getState()))&&now()<nextPollAt){schedule(nextPollAt-now());return;}
   if(now()<cooldownUntil||(automatic&&now()<retryUntil)){schedule();return;}busy=true;clearTimer(timer);status('正在同步，学习可继续…');
   try {
@@ -190,13 +191,13 @@ export function createSync({storage,base,getState,applyState,onStatus=()=>{},fet
     migration=true;settled=true;capture();persist(mergeCloud(getState(),data.state));break;
    }
    if(!settled)throw Error('另一台设备正在更新，稍后会继续合并。');
-   if(storage.getItem('word-learning-migrated-v1')!=='yes')storage.setItem('word-learning-migrated-v1','yes');retry=1000;cooldownUntil=0;retryUntil=0;acknowledged=stable(data.state);
+   if(storage.getItem('word-learning-migrated-v1')!=='yes')storage.setItem('word-learning-migrated-v1','yes');retry=1000;cooldownUntil=0;retryUntil=0;acknowledged=stable(data.state);dirty=stable(cloudDocument(getState()))!==acknowledged;
    // Edits while a request was in flight need a subsequent upload.
-   if(stable(cloudDocument(getState()))!==stable(data.state)){status('新记录待同步…');schedule(300);}else{status('已同步 · 所有设备共用一份记录','ok');nextPollAt=now()+30000;schedule(30000);}
+   if(stable(cloudDocument(getState()))!==stable(data.state)){status('新记录待同步…');schedule(300);}else{status('已同步 · 所有设备共用一份记录','ok');nextPollAt=now()+pollInterval;schedule(pollInterval);}
   } catch(error) {nextPollAt=0;retryUntil=now()+retry;status(error.name==='TimeoutError'||error.name==='AbortError'?'同步超时，记录已保存在本机，稍后自动重试。':error.message||'离线中，记录已保存在本机，联网后自动重试。','error');schedule(retry);retry=Math.min(retry*2,60000);}
   finally{busy=false;}
  }
- return {capture,saved,run,start(){if(key)schedule(0);else status('记录已保存在本机；填写同步口令后自动合并旧记录。','locked');},
+ return {capture,saved,run,visibilityChanged(){if(!isVisible()&&!dirty)clearTimer(timer);else void run({automatic:true});},start(){if(key)schedule(0);else status('记录已保存在本机；填写同步口令后自动合并旧记录。','locked');},
   unlock(value,remember=true){if(!ready)throw Error('本机备份尚未成功，请先导出备份。');if(!/^[A-Za-z0-9_-]{6,128}$/.test(value))throw Error('请填写6–128位的专用同步口令（字母、数字、- 或 _）。');key=value;acknowledged=null;nextPollAt=0;retryUntil=0;retry=1000;if(remember)storage.setItem(KEY_KEY,key);else storage.removeItem?.(KEY_KEY);stopped=false;schedule(0);},
   stop(){stopped=true;clearTimer(timer);},get ready(){return ready;},get actor(){return actor;}};
 }

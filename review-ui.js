@@ -1,4 +1,4 @@
-import {MODES,SKILLS,skillFor,filterReviewItems,startRound,currentQuestion,addHint,submitQuestion,advanceQuestion,roundSummary,evidence} from './review.js?v=fbe7873f8423d801';
+import {MODES,SKILLS,skillFor,filterReviewItems,startRound,currentQuestion,addHint,submitQuestion,advanceQuestion,roundSummary,evidence} from './review.js?v=370c24f7e6e3012c';
 import {getUseQuestion,useQuestionCoverage} from './review-content.js?v=6ce6a947486b19f4';
 
 export function createReviewUI({document:doc,state,getFlow,save,render,start,home,learn,say,stopAudio,wordDisplay,phoneticDisplay,undo}){

@@ -1,4 +1,4 @@
-import {reviewEvidence,REVIEW_SKILLS,createReviewUI,day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,pronunciationInfo,reviewProgress,senseOptions,commitDraft,recordReview,undoReview,wordKey,wordGroups,searchBook,dueItems,prepareSense,previewImport,applyImport,getSessions,activateSession,parkLearning,resumeLearning,saveWaiting,dailyStats,todayReviewItems,createSync,mergeCloud,restoreTask,captureTask,newId,stable,cloudDocument} from './learning.js?v=e1b7d676191daf66';
+import {reviewEvidence,REVIEW_SKILLS,createReviewUI,day,loadState,addItem,rateItem,mergeStates,getFlow,learnWord,beginReview,advanceReview,pronunciationParts,pronunciationInfo,reviewProgress,senseOptions,commitDraft,recordReview,undoReview,wordKey,wordGroups,searchBook,dueItems,prepareSense,previewImport,applyImport,getSessions,activateSession,parkLearning,resumeLearning,saveWaiting,dailyStats,todayReviewItems,createSync,mergeCloud,restoreTask,captureTask,newId,stable,cloudDocument} from './learning.js?v=63ce59638a887603';
 const $=id=>document.getElementById(id),base=(window.WORD_LEARNING_CONFIG?.API_BASE_URL||'').replace(/\/$/,'');
 let sync=null,pendingSyncPaint=false,pendingSyncLookup=false,syncPointerDown=false;
 const editingControl=()=>/^(INPUT|SELECT|TEXTAREA)$/.test(document.activeElement?.tagName||'');
@@ -293,6 +293,7 @@ function renderSyncBranches(){
 sync=createSync({storage,base,getState:()=>state,applyState:next=>applyCloudState(next,true,true),fetcher:fetch,setTimer:setTimeout,clearTimer:clearTimeout,onStatus:(text,kind)=>{const extra=Math.max(0,(state.cloud?.tasks?.length||0)-1);$('sync-status').textContent=text+(extra?' · 另有 '+extra+' 份进度，可展开云同步继续':'');$('sync-status').dataset.kind=kind;}});
 $('sync-connect').onsubmit=e=>{e.preventDefault();try{sync.unlock($('sync-key').value.trim(),$('sync-remember').checked);$('sync-key').value='';}catch(error){$('sync-status').textContent=error.message;$('sync-key').focus();}};
 $('sync-now').onclick=()=>void sync.run();
+document.addEventListener?.('visibilitychange',()=>sync.visibilityChanged());
 window.addEventListener?.('online',()=>void sync.run({automatic:true}));
 window.addEventListener?.('focus',()=>void sync.run({automatic:true}));
 window.addEventListener?.('storage',e=>{if(e.key==='word-learning-v1'){
